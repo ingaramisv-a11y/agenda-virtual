@@ -1,0 +1,174 @@
+      <div class="view-frame" id="view-frame" hidden aria-hidden="true">
+        <div class="view-empty" id="view-empty" role="status" aria-live="polite">
+          Selecciona una sección para comenzar.
+        </div>
+      </div>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agenda Pro</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <section class="auth-screen" id="auth-screen" aria-live="polite">
+    <div class="auth-card">
+      <!-- Agenda virtual login title kept for reference -->
+      <p class="auth-subtitle">Agenda Virtual</p>
+
+      <form class="auth-form" id="auth-form" novalidate>
+        <label>
+          Usuario
+          <input id="auth-username" type="text" placeholder="Tu usuario" required>
+        </label>
+
+        <label>
+          Contraseña
+          <input id="auth-password" type="password" placeholder="Tu contraseña" required>
+        </label>
+
+        <button id="auth-submit" type="submit">Ingresar</button>
+        <p class="auth-hint">Credenciales temporales: diana / 12345</p>
+      </form>
+
+      <div class="social-login">
+        <p class="social-label">También puedes iniciar sesión con</p>
+        <div class="social-buttons">
+          <button type="button" class="social-btn google" data-social-login="google">
+            <span>Google</span>
+            <small>Gmail</small>
+          </button>
+          <button type="button" class="social-btn facebook" data-social-login="facebook">
+            <span>Facebook</span>
+            <small>Meta</small>
+          </button>
+        </div>
+      </div>
+
+      <button type="button" class="tertiary-action" id="auth-register">Registrar mi teléfono</button>
+      <p class="auth-message" id="auth-message" role="status" aria-live="assertive"></p>
+    </div>
+  </section>
+
+  <div class="page-shell" id="app-shell" hidden aria-hidden="true">
+    <header class="dashboard-header">
+      <p class="dashboard-kicker">Panel principal</p>
+      <h1>Bienvenida, Profe Diana</h1>
+      <p class="dashboard-subtitle">Gestiona los planes activos, registra asistencia y visualiza el horario semanal en un solo lugar.</p>
+    </header>
+
+    <main>
+      <section class="panel-grid" id="nav-panels" aria-label="Navegación principal">
+        <button type="button" class="panel panel-action" id="btn-nuevo-plan">
+          <h2>Añadir un nuevo plan</h2>
+        </button>
+        <button type="button" class="panel panel-action" id="btn-consultar-plan">
+          <h2>Registro de clases</h2>
+        </button>
+        <button type="button" class="panel panel-action" id="btn-horario">
+          <h2>Horario</h2>
+        </button>
+      </section>
+
+      <section class="form-card view-panel view-panel-standalone" id="form-plan" data-view="plan" hidden aria-hidden="true">
+        <div class="form-header">
+          <h2>Registro de plan de natación</h2>
+          <p>Completa los datos para registrar el plan personalizado del alumno.</p>
+        </div>
+        <form id="plan-form">
+          <div class="form-grid">
+            <div class="form-group">
+              <label for="nombreAlumno">Nombre del alumno</label>
+              <input type="text" id="nombreAlumno" name="nombreAlumno" placeholder="Escribe el nombre completo" required>
+            </div>
+            <div class="form-group">
+              <label for="edadAlumno">Edad del alumno</label>
+              <input type="number" id="edadAlumno" name="edadAlumno" placeholder="Ingresa la edad" min="1" max="99" required>
+            </div>
+            <div class="form-group">
+              <label for="nombreAcudiente">Nombre del acudiente o padre</label>
+              <input type="text" id="nombreAcudiente" name="nombreAcudiente" placeholder="Nombre de contacto" required>
+            </div>
+            <div class="form-group">
+              <label for="telefonoAcudiente">Número de teléfono del acudiente</label>
+              <input type="tel" id="telefonoAcudiente" name="telefonoAcudiente" placeholder="000 000 0000" required>
+            </div>
+            <div class="form-group">
+              <label for="tipoPlan">Tipo de plan</label>
+              <select id="tipoPlan" name="tipoPlan" required>
+                <option value="" disabled selected>Selecciona una opción</option>
+                <option value="4">4 clases</option>
+                <option value="8">8 clases</option>
+              </select>
+            </div>
+          </div>
+
+          <fieldset class="form-group form-days">
+            <legend>Horario • Paso 1: Selección de días</legend>
+            <div class="checkbox-grid">
+              <label><input type="checkbox" value="lunes" data-day-checkbox> Lunes</label>
+              <label><input type="checkbox" value="martes" data-day-checkbox> Martes</label>
+              <label><input type="checkbox" value="miercoles" data-day-checkbox> Miércoles</label>
+              <label><input type="checkbox" value="jueves" data-day-checkbox> Jueves</label>
+              <label><input type="checkbox" value="viernes" data-day-checkbox> Viernes</label>
+              <label><input type="checkbox" value="sabado" data-day-checkbox> Sábado</label>
+            </div>
+          </fieldset>
+
+          <div class="form-group horario-step" id="horario-step">
+            <label for="horaSeleccion">Horario • Paso 2: Selección horaria</label>
+            <input type="time" id="horaSeleccion" name="horaSeleccion" disabled>
+            <small>Selecciona primero al menos un día.</small>
+          </div>
+
+          <div class="form-actions">
+            <button type="submit" class="primary-action">Enviar plan</button>
+          </div>
+        </form>
+      </section>
+      <section class="consult-card view-panel view-panel-standalone" id="consulta-plan" data-view="consulta" hidden aria-hidden="true">
+        <div class="form-header">
+          <h2>Consultar plan registrado</h2>
+          <p>Ingresa el nombre del alumno o el número de teléfono para visualizar su plan.</p>
+        </div>
+        <form id="consulta-form" class="consulta-form">
+          <label for="consultaTermino">Nombre del alumno o número de teléfono</label>
+          <div class="consulta-input-row">
+            <input type="text" id="consultaTermino" name="consultaTermino" placeholder="Nombre del alumno o número de teléfono" required>
+            <button type="submit" class="secondary-action">Buscar plan</button>
+          </div>
+        </form>
+        <div class="resultado-contenedor" id="resultado-plan">
+          <p class="empty-state">No hay resultados para mostrar. Registra un plan o realiza una búsqueda.</p>
+        </div>
+      </section>
+
+      <section class="schedule-card view-panel view-panel-standalone" id="horario-card" data-view="horario" hidden aria-hidden="true">
+        <div class="form-header">
+          <h2>Calendario semanal 2026</h2>
+          <p>Visualiza únicamente los días transcurridos de la semana actual del mes en curso.</p>
+        </div>
+        <div class="week-calendar">
+          <div class="week-header">
+            <div>
+              <p class="week-label" id="week-label">Semana actual · 2026</p>
+              <span class="week-range" id="week-range">--</span>
+            </div>
+            <span class="week-note">Actualizado automáticamente</span>
+          </div>
+          <div class="week-grid" id="week-grid">
+            <p class="empty-state">Haz clic en "Horario" para cargar la semana.</p>
+          </div>
+          <p class="calendar-footnote">Solo se muestran los días del mes que ya han ocurrido durante la semana.</p>
+        </div>
+      </section>
+
+    </main>
+  </div>
+</body>
+</html>

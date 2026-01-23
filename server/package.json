@@ -1,0 +1,24 @@
+{
+  "name": "agenda-pro-backend",
+  "version": "1.0.0",
+  "description": "API para gestionar planes y registros de la Agenda Pro",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "better-sqlite3": "^9.4.0",
+    "axios": "^1.6.8",
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "web-push": "^3.6.6"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  }
+}
