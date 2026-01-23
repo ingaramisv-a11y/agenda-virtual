@@ -1,4 +1,37 @@
 const DEFAULT_NOTIFICATION_TITLE = "Agenda Pro";
+const FALLBACK_TARGET_URL = "/";
+const ACTION_ACCEPT_PLAN = "accept-plan";
+const ACTION_REJECT_PLAN = "reject-plan";
+
+const focusOrOpenUrl = async (targetUrl = FALLBACK_TARGET_URL) => {
+  const normalizedUrl = targetUrl || FALLBACK_TARGET_URL;
+  let absoluteUrl = normalizedUrl;
+  try {
+    absoluteUrl = new URL(normalizedUrl, self.location.origin).href;
+  } catch (_error) {
+    absoluteUrl = normalizedUrl;
+  }
+  const clientsList = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+  const matchingClient = clientsList.find((client) => {
+    try {
+      return client.url === absoluteUrl || client.url.includes(absoluteUrl);
+    } catch (_error) {
+      return false;
+    }
+  });
+
+  if (matchingClient) {
+    await matchingClient.focus();
+    return matchingClient;
+  }
+
+  return self.clients.openWindow(absoluteUrl);
+};
+
+const broadcastMessage = async (message) => {
+  const clientsList = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+  clientsList.forEach((client) => client.postMessage(message));
+};
 
 self.addEventListener("install", () => {
   self.skipWaiting();
@@ -23,6 +56,10 @@ self.addEventListener("push", (event) => {
     data: payload.data || {},
   };
 
+  if (!options.data.url) {
+    options.data.url = FALLBACK_TARGET_URL;
+  }
+
   if (payload.icon) {
     options.icon = payload.icon;
   }
@@ -34,6 +71,11 @@ self.addEventListener("push", (event) => {
   }
   if (payload.actions) {
     options.actions = payload.actions;
+  } else {
+    options.actions = [
+      { action: ACTION_ACCEPT_PLAN, title: "Aceptar plan" },
+      { action: ACTION_REJECT_PLAN, title: "Rechazar" },
+    ];
   }
   if (typeof payload.requireInteraction === "boolean") {
     options.requireInteraction = payload.requireInteraction;
@@ -44,25 +86,18 @@ self.addEventListener("push", (event) => {
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
-  const targetUrl = event.notification.data?.url || "/";
+  const targetUrl = event.notification.data?.url || FALLBACK_TARGET_URL;
+  const action = event.action;
 
-  event.waitUntil(
-    self.clients
-      .matchAll({ type: "window", includeUncontrolled: true })
-      .then((clientList) => {
-        const matchingClient = clientList.find((client) => {
-          try {
-            return client.url.includes(targetUrl);
-          } catch (_error) {
-            return false;
-          }
-        });
+  if (action === ACTION_ACCEPT_PLAN || action === ACTION_REJECT_PLAN) {
+    const decision = action === ACTION_ACCEPT_PLAN ? "accept" : "reject";
+    event.waitUntil(
+      broadcastMessage({ type: "push-plan-action", decision, payload: event.notification.data || {} }).then(() =>
+        focusOrOpenUrl(targetUrl)
+      )
+    );
+    return;
+  }
 
-        if (matchingClient) {
-          return matchingClient.focus();
-        }
-
-        return self.clients.openWindow(targetUrl);
-      })
-  );
+  event.waitUntil(focusOrOpenUrl(targetUrl));
 });

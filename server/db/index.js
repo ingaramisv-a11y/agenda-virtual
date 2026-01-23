@@ -93,6 +93,10 @@ const findPushSubscriptionByPhoneStmt = db.prepare(
   "SELECT * FROM push_subscriptions WHERE phone = ? OR sanitized_phone = ?"
 );
 
+const deletePushSubscriptionStmt = db.prepare(
+  "DELETE FROM push_subscriptions WHERE phone = ? OR sanitized_phone = ?"
+);
+
 const createPlan = (payload) => {
   const planRecord = {
     id: payload.id,
@@ -190,6 +194,16 @@ const getPushSubscriptionByPhone = (phone) => {
   return mapPushSubscription(findPushSubscriptionByPhoneStmt.get(trimmedPhone, digits));
 };
 
+const deletePushSubscriptionByPhone = (phone) => {
+  const trimmedPhone = (phone || "").trim();
+  const digits = sanitizeDigits(trimmedPhone);
+  if (!trimmedPhone && !digits) {
+    return false;
+  }
+  const result = deletePushSubscriptionStmt.run(trimmedPhone, digits);
+  return result.changes > 0;
+};
+
 module.exports = {
   createPlan,
   searchPlan,
@@ -197,4 +211,5 @@ module.exports = {
   deletePlan,
   upsertPushSubscription,
   getPushSubscriptionByPhone,
+  deletePushSubscriptionByPhone,
 };

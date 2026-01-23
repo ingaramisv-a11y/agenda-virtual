@@ -1,5 +1,4 @@
 document.addEventListener("DOMContentLoaded", () => {
-  const API_BASE_URL = "http://localhost:4000/api";
   const SERVICE_WORKER_PATH = "sw.js";
   const PHONE_DIGITS_MIN_LENGTH = 10;
   const PHONE_DIGITS_MAX_LENGTH = 15;
@@ -47,6 +46,39 @@ document.addEventListener("DOMContentLoaded", () => {
   const VALID_USER = "diana";
   const VALID_PASS = "12345";
   const sanitizeDigits = (value = "") => value.replace(/[^0-9]/g, "");
+  const resolveBackendBaseUrl = () => {
+    if (typeof window === "undefined") {
+      return "";
+    }
+
+    let storedBase = null;
+    try {
+      storedBase = localStorage.getItem("agenda-backend-base-url");
+    } catch (_error) {
+      storedBase = null;
+    }
+
+    const metaBase = document.querySelector('meta[name="backend-base-url"]')?.content;
+    const candidates = [window.__BACKEND_BASE_URL__, window.__API_BASE_URL__, metaBase, storedBase, window.location?.origin];
+    const selected = candidates.find((candidate) => typeof candidate === "string" && candidate.trim().length);
+    if (!selected) {
+      return "";
+    }
+
+    const normalized = selected.trim().replace(/\/$/, "");
+    try {
+      if (normalized && normalized !== storedBase) {
+        localStorage.setItem("agenda-backend-base-url", normalized);
+      }
+    } catch (_error) {
+      /* no-op */
+    }
+    return normalized;
+  };
+
+  const BACKEND_BASE_URL = resolveBackendBaseUrl();
+  const API_BASE_URL = `${BACKEND_BASE_URL}/api`;
+  const PUSH_BASE_URL = `${BACKEND_BASE_URL}/push`;
 
   const apiFetch = async (url, options = {}) => {
     const response = await fetch(url, options);
@@ -77,9 +109,15 @@ document.addEventListener("DOMContentLoaded", () => {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
       }),
-    getPushPublicKey: () => apiFetch(`${API_BASE_URL}/push/public-key`),
+    getPushPublicKey: () => apiFetch(`${PUSH_BASE_URL}/public-key`),
     registerPushContact: (payload) =>
-      apiFetch(`${API_BASE_URL}/push/subscriptions`, {
+      apiFetch(`${PUSH_BASE_URL}/subscriptions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }),
+    sendPushNotification: (payload) =>
+      apiFetch(`${PUSH_BASE_URL}/send`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -365,7 +403,7 @@ document.addEventListener("DOMContentLoaded", () => {
       const subscriptionPayload = typeof subscription.toJSON === "function" ? subscription.toJSON() : subscription;
 
       await api.registerPushContact({
-        telefono: digits,
+        phone: digits,
         subscription: subscriptionPayload,
       });
 
@@ -667,13 +705,36 @@ document.addEventListener("DOMContentLoaded", () => {
       };
 
       try {
-        await api.requestPlanConfirmation(nuevoPlan);
+        const pendingResponse = await api.requestPlanConfirmation(nuevoPlan);
+        const pendingId = pendingResponse?.data?.pendingId || null;
+        const telefonoDigits = sanitizeDigits(telefonoAcudiente);
+
+        if (telefonoDigits) {
+          try {
+            await api.sendPushNotification({
+              phone: telefonoDigits,
+              notification: {
+                title: `Confirma el plan de ${nombreAlumno}`,
+                body: `Selecciona aceptar para aprobar las ${tipoPlan} clases propuestas.`,
+                data: {
+                  pendingId,
+                  telefono: telefonoDigits,
+                  alumno: nombreAlumno,
+                  url: `${window.location.origin}?pending=${pendingId || ""}`,
+                },
+              },
+            });
+          } catch (pushError) {
+            console.warn("No se pudo enviar la notificación push", pushError);
+          }
+        }
+
         planForm.reset();
         dayCheckboxes.forEach((checkbox) => {
           checkbox.checked = false;
         });
         updateHorarioVisibility();
-        alert("Solicitud enviada. Espera a que el acudiente confirme por Telegram para guardar el plan.");
+        alert("Solicitud enviada. Espera a que el acudiente acepte la notificación para guardar el plan.");
       } catch (error) {
         alert(error.message);
       }
@@ -768,4 +829,19 @@ document.addEventListener("DOMContentLoaded", () => {
   renderWeekCalendar();
   setActiveView();
   updateHorarioVisibility();
+
+  if (typeof navigator !== "undefined" && navigator.serviceWorker) {
+    navigator.serviceWorker.addEventListener("message", (event) => {
+      const payload = event.data || {};
+      if (payload.type !== "push-plan-action") {
+        return;
+      }
+
+      if (payload.decision === "accept") {
+        alert("Gracias por aceptar el plan. Notificaremos a la administración.");
+      } else if (payload.decision === "reject") {
+        alert("Has rechazado el plan pendiente. Ponte en contacto con la administración si necesitas ajustes.");
+      }
+    });
+  }
 });

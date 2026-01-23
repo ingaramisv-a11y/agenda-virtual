@@ -18,6 +18,7 @@ const {
   removePendingPlan,
   upsertPushSubscription,
   getPushSubscriptionByPhone,
+  deletePushSubscriptionByPhone,
 } = require('./db');
 
 const PORT = process.env.PORT || 4000;
@@ -26,6 +27,11 @@ const TELEGRAM_API_BASE = TELEGRAM_BOT_TOKEN ? `https://api.telegram.org/bot${TE
 const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY;
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
 const VAPID_CONTACT_EMAIL = process.env.VAPID_CONTACT_EMAIL;
+const FRONTEND_BASE_URL = process.env.FRONTEND_BASE_URL || '';
+const RAW_ALLOWED_ORIGINS = process.env.APP_ALLOWED_ORIGINS || '';
+const ALLOWED_ORIGINS = RAW_ALLOWED_ORIGINS.split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
 const hasVapidConfig = Boolean(VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY && VAPID_CONTACT_EMAIL);
 
 if (hasVapidConfig) {
@@ -36,7 +42,30 @@ if (hasVapidConfig) {
 
 const app = express();
 
-app.use(cors());
+const isOriginAllowed = (origin) => {
+  if (!ALLOWED_ORIGINS.length || !origin) {
+    return true;
+  }
+  return ALLOWED_ORIGINS.some((allowed) => {
+    if (allowed === '*') {
+      return true;
+    }
+    return allowed === origin;
+  });
+};
+
+const corsOptions = {
+  origin: (origin, callback) => {
+    if (isOriginAllowed(origin)) {
+      callback(null, true);
+    } else {
+      callback(new Error(`Origin ${origin} is not allowed by CORS`));
+    }
+  },
+  credentials: true,
+};
+
+app.use(cors(corsOptions));
 app.use(express.json());
 
 const confirmationKeyboard = {
@@ -60,6 +89,39 @@ const isValidPushSubscription = (candidate) => {
     }
   }
   return true;
+};
+
+const resolveActionUrl = (explicitUrl) => {
+  const trimmed = explicitUrl?.trim();
+  if (trimmed) {
+    return trimmed;
+  }
+  const frontendUrl = FRONTEND_BASE_URL?.trim();
+  if (frontendUrl) {
+    return frontendUrl;
+  }
+  return '/';
+};
+
+const buildPushNotificationPayload = ({ title, body, data = {}, tag, icon, badge } = {}) => {
+  const payloadData = {
+    ...data,
+    url: resolveActionUrl(data.url),
+  };
+
+  return {
+    title: title || 'Agenda Pro',
+    body: body || 'Tienes una solicitud pendiente por confirmar.',
+    tag: tag || 'agenda-pro-plan',
+    icon,
+    badge,
+    data: payloadData,
+    requireInteraction: true,
+    actions: [
+      { action: 'accept-plan', title: 'Aceptar plan' },
+      { action: 'reject-plan', title: 'Rechazar plan' },
+    ],
+  };
 };
 
 const ensureBotConfigured = () => {
@@ -103,14 +165,14 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-app.get('/api/push/public-key', (_req, res) => {
+const handlePushPublicKey = (_req, res) => {
   if (!VAPID_PUBLIC_KEY) {
     return res.status(503).json({ error: 'Las notificaciones push no están configuradas.' });
   }
   res.json({ publicKey: VAPID_PUBLIC_KEY });
-});
+};
 
-app.post('/api/push/subscriptions', (req, res) => {
+const handlePushSubscription = (req, res) => {
   if (!hasVapidConfig) {
     return res.status(503).json({ error: 'Las notificaciones push no están disponibles.' });
   }
@@ -126,15 +188,70 @@ app.post('/api/push/subscriptions', (req, res) => {
   }
 
   try {
+    const existing = getPushSubscriptionByPhone(digits);
     const stored = upsertPushSubscription({ phone: digits, subscription });
     if (!stored) {
       return res.status(500).json({ error: 'No se pudo guardar la suscripción.' });
     }
-    res.status(201).json({ message: 'Suscripción registrada correctamente.', data: { phone: stored.phone } });
+    const statusCode = existing ? 200 : 201;
+    const message = existing
+      ? 'Suscripción actualizada correctamente.'
+      : 'Suscripción registrada correctamente.';
+    res.status(statusCode).json({ message, data: { phone: stored.phone } });
   } catch (error) {
     console.error('Error guardando la suscripción push', error);
     res.status(500).json({ error: 'No se pudo guardar la suscripción push.' });
   }
+};
+
+const handlePushSend = async (req, res) => {
+  if (!hasVapidConfig) {
+    return res.status(503).json({ error: 'Las notificaciones push no están disponibles.' });
+  }
+
+  const { phone, notification = {} } = req.body || {};
+  const digits = sanitizeDigits(phone);
+  if (!digits) {
+    return res.status(400).json({ error: 'Debes enviar un número de teléfono válido.' });
+  }
+
+  const subscriptionRecord = getPushSubscriptionByPhone(digits);
+  if (!subscriptionRecord || !subscriptionRecord.subscription) {
+    return res.status(404).json({ error: 'No existe una suscripción push activa para este número.' });
+  }
+
+  const payload = buildPushNotificationPayload({
+    ...notification,
+    data: {
+      phone: digits,
+      pendingId: notification.pendingId || notification.data?.pendingId,
+      ...notification.data,
+    },
+  });
+
+  try {
+    await webpush.sendNotification(subscriptionRecord.subscription, JSON.stringify(payload));
+    res.json({ message: 'Notificación enviada correctamente.' });
+  } catch (error) {
+    console.error('Error enviando la notificación push', error);
+    if (error.statusCode === 404 || error.statusCode === 410) {
+      deletePushSubscriptionByPhone(digits);
+      return res.status(410).json({ error: 'La suscripción ya no es válida y fue eliminada.' });
+    }
+    res.status(502).json({ error: 'No se pudo enviar la notificación push.' });
+  }
+};
+
+['/api/push/public-key', '/push/public-key'].forEach((path) => {
+  app.get(path, handlePushPublicKey);
+});
+
+['/api/push/subscriptions', '/push/subscriptions'].forEach((path) => {
+  app.post(path, handlePushSubscription);
+});
+
+['/api/push/send', '/push/send'].forEach((path) => {
+  app.post(path, handlePushSend);
 });
 
 const validatePlanPayload = (body) => {
