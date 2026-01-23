@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const path = require('path');
 const webpush = require('web-push');
 const {
+  createPlan,
   searchPlan,
   toggleClase,
   deletePlan,
@@ -108,6 +109,10 @@ const savePendingPlanRecord = (payload) => {
   pendingPlans.set(pendingId, record);
   return record;
 };
+
+const getPendingPlanRecord = (pendingId) => pendingPlans.get(pendingId);
+
+const deletePendingPlanRecord = (pendingId) => pendingPlans.delete(pendingId);
 
 const sanitizeDigits = (value = '') => value.replace(/[^0-9]/g, '');
 const isValidPushSubscription = (candidate) => {
@@ -286,6 +291,58 @@ app.post('/api/planes/pending', (req, res) => {
 
   const pendingRecord = savePendingPlanRecord(planPayload);
   res.status(202).json({ data: { pendingId: pendingRecord.id, status: pendingRecord.status } });
+});
+
+app.get('/api/planes/pending/:pendingId', (req, res) => {
+  const { pendingId } = req.params;
+  const record = getPendingPlanRecord(pendingId);
+  if (!record) {
+    return res.status(404).json({ error: 'No existe una solicitud pendiente con el identificador proporcionado.' });
+  }
+  res.json({
+    data: {
+      pendingId: record.id,
+      status: record.status,
+      payload: record.payload,
+      createdAt: record.createdAt,
+      resolvedAt: record.resolvedAt || null,
+    },
+  });
+});
+
+app.post('/api/planes/pending/:pendingId/decision', (req, res) => {
+  const { pendingId } = req.params;
+  const { decision } = req.body || {};
+  if (!['accept', 'reject'].includes(decision)) {
+    return res.status(400).json({ error: 'Debes enviar una decisión válida: accept o reject.' });
+  }
+
+  const record = getPendingPlanRecord(pendingId);
+  if (!record) {
+    return res.status(404).json({ error: 'No existe una solicitud pendiente con el identificador proporcionado.' });
+  }
+  if (record.status !== 'pending') {
+    return res.status(409).json({ error: 'Esta solicitud ya fue resuelta.' });
+  }
+
+  const resolveRecord = (status, extra = {}) => {
+    record.status = status;
+    record.resolvedAt = new Date().toISOString();
+    deletePendingPlanRecord(pendingId);
+    return res.json({ data: { pendingId: record.id, status: record.status, ...extra } });
+  };
+
+  if (decision === 'accept') {
+    try {
+      const plan = createPlan(record.payload);
+      return resolveRecord('accepted', { plan });
+    } catch (error) {
+      console.error('Error al confirmar el plan pendiente', error);
+      return res.status(500).json({ error: 'No se pudo confirmar el plan pendiente.' });
+    }
+  }
+
+  return resolveRecord('rejected');
 });
 
 app.post('/api/planes', (_req, res) => {

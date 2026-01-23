@@ -88,16 +88,35 @@ self.addEventListener("notificationclick", (event) => {
   event.notification.close();
   const targetUrl = event.notification.data?.url || FALLBACK_TARGET_URL;
   const action = event.action;
+  const pendingId = event.notification.data?.pendingId;
 
   if (action === ACTION_ACCEPT_PLAN || action === ACTION_REJECT_PLAN) {
     const decision = action === ACTION_ACCEPT_PLAN ? "accept" : "reject";
     event.waitUntil(
-      broadcastMessage({ type: "push-plan-action", decision, payload: event.notification.data || {} }).then(() =>
-        focusOrOpenUrl(targetUrl)
-      )
+      (async () => {
+        if (pendingId) {
+          try {
+            await fetch(`/api/planes/pending/${pendingId}/decision`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ decision }),
+            });
+          } catch (error) {
+            console.error("No se pudo registrar la decisión desde el Service Worker", error);
+          }
+        }
+
+        await broadcastMessage({ type: "push-plan-action", decision, payload: event.notification.data || {} });
+        return focusOrOpenUrl(targetUrl);
+      })()
     );
     return;
   }
 
-  event.waitUntil(focusOrOpenUrl(targetUrl));
+  event.waitUntil(
+    Promise.all([
+      broadcastMessage({ type: "push-plan-open", payload: event.notification.data || {} }),
+      focusOrOpenUrl(targetUrl),
+    ])
+  );
 });

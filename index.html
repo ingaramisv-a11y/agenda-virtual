@@ -171,5 +171,46 @@
 
     </main>
   </div>
+
+  <div class="plan-review-layer" id="plan-review-shell" hidden aria-hidden="true">
+    <div class="plan-review-backdrop" id="plan-review-backdrop" aria-hidden="true"></div>
+    <section class="plan-review-card" role="dialog" aria-modal="true" aria-labelledby="plan-review-title">
+      <button type="button" class="plan-review-dismiss" id="plan-review-close" aria-label="Cerrar revisión">×</button>
+      <p class="plan-review-kicker">Solicitud pendiente</p>
+      <h2 id="plan-review-title">Confirma el nuevo plan</h2>
+      <p class="plan-review-meta" id="plan-review-meta">Revisa el plan antes de confirmar.</p>
+      <dl class="plan-review-details">
+        <div>
+          <dt>Acudiente</dt>
+          <dd id="plan-review-acudiente">--</dd>
+        </div>
+        <div>
+          <dt>Contacto</dt>
+          <dd id="plan-review-telefono">--</dd>
+        </div>
+        <div>
+          <dt>Alumno</dt>
+          <dd id="plan-review-alumno">--</dd>
+        </div>
+        <div>
+          <dt>Días realizados</dt>
+          <dd id="plan-review-dias">--</dd>
+        </div>
+        <div>
+          <dt>Horario</dt>
+          <dd id="plan-review-hora">--</dd>
+        </div>
+        <div>
+          <dt>Clases</dt>
+          <dd id="plan-review-clases">--</dd>
+        </div>
+      </dl>
+      <p class="plan-review-status" id="plan-review-status" role="status" aria-live="assertive"></p>
+      <div class="plan-review-actions">
+        <button type="button" class="primary-action" id="plan-review-accept">Aceptar plan</button>
+        <button type="button" class="ghost-btn" id="plan-review-reject">Solicitar cambios</button>
+      </div>
+    </section>
+  </div>
 </body>
 </html>

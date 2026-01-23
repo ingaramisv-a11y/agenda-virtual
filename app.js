@@ -36,6 +36,22 @@ document.addEventListener("DOMContentLoaded", () => {
     consulta: openConsultaButton,
     horario: openHorarioButton,
   };
+  const planReviewElements = {
+    shell: document.getElementById("plan-review-shell"),
+    backdrop: document.getElementById("plan-review-backdrop"),
+    title: document.getElementById("plan-review-title"),
+    meta: document.getElementById("plan-review-meta"),
+    alumno: document.getElementById("plan-review-alumno"),
+    acudiente: document.getElementById("plan-review-acudiente"),
+    telefono: document.getElementById("plan-review-telefono"),
+    dias: document.getElementById("plan-review-dias"),
+    hora: document.getElementById("plan-review-hora"),
+    clases: document.getElementById("plan-review-clases"),
+    status: document.getElementById("plan-review-status"),
+    acceptButton: document.getElementById("plan-review-accept"),
+    rejectButton: document.getElementById("plan-review-reject"),
+    closeButton: document.getElementById("plan-review-close"),
+  };
 
   let planMostradoId = null;
   let isAuthenticated = false;
@@ -43,6 +59,12 @@ document.addEventListener("DOMContentLoaded", () => {
   let cachedVapidPublicKey = null;
   let phoneRegistrationInFlight = false;
   let phoneRegistrationElements = null;
+  const planReviewState = {
+    pendingId: null,
+    record: null,
+    isLoading: false,
+    isResolving: false,
+  };
 
   const VALID_USER = "diana";
   const VALID_PASS = "12345";
@@ -110,6 +132,13 @@ document.addEventListener("DOMContentLoaded", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       }),
+    getPendingPlan: (pendingId) => apiFetch(`${API_BASE_URL}/planes/pending/${pendingId}`),
+    resolvePendingPlan: (pendingId, decision) =>
+      apiFetch(`${API_BASE_URL}/planes/pending/${pendingId}/decision`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ decision }),
+      }),
     searchPlan: (term) => apiFetch(`${API_BASE_URL}/planes?termino=${encodeURIComponent(term)}`),
     toggleClase: (planId, claseIndex) =>
       apiFetch(`${API_BASE_URL}/planes/${planId}/clases/${claseIndex}`, {
@@ -134,6 +163,229 @@ document.addEventListener("DOMContentLoaded", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       }),
+  };
+
+  const getPendingIdFromQuery = () => {
+    if (typeof window === "undefined") {
+      return null;
+    }
+    try {
+      const params = new URLSearchParams(window.location.search);
+      return params.get("pending");
+    } catch (_error) {
+      return null;
+    }
+  };
+
+  const clearPendingQueryParam = () => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    try {
+      const url = new URL(window.location.href);
+      if (!url.searchParams.has("pending")) {
+        return;
+      }
+      url.searchParams.delete("pending");
+      const nextUrl = `${url.pathname}${url.search}${url.hash}`;
+      window.history.replaceState({}, document.title, nextUrl);
+    } catch (_error) {
+      /* noop */
+    }
+  };
+
+  const formatPhoneDisplay = (value = "") => {
+    const digits = sanitizeDigits(value);
+    if (!digits) {
+      return value || "Sin teléfono registrado";
+    }
+    if (digits.length === 10) {
+      return `${digits.slice(0, 3)} ${digits.slice(3, 6)} ${digits.slice(6)}`;
+    }
+    if (digits.length === 7) {
+      return `${digits.slice(0, 3)} ${digits.slice(3)}`;
+    }
+    return digits;
+  };
+
+  const formatDaysLabel = (dias = []) => {
+    if (!Array.isArray(dias) || !dias.length) {
+      return "Sin días asignados";
+    }
+    return dias
+      .map((dia) => {
+        if (!dia) return "";
+        const normalized = dia.toString().toLowerCase();
+        return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+      })
+      .filter(Boolean)
+      .join(" · ");
+  };
+
+  const formatPlanMeta = (plan = {}) => {
+    const clasesLabel = plan.tipoPlan ? `${plan.tipoPlan} clases` : "Plan personalizado";
+    const diasLabel = formatDaysLabel(plan.dias);
+    const horaLabel = plan.hora ? ` · ${plan.hora}` : "";
+    return `${clasesLabel} · ${diasLabel}${horaLabel}`.trim();
+  };
+
+  const setPlanReviewVisibility = (isVisible) => {
+    if (!planReviewElements.shell) return;
+    if (isVisible) {
+      planReviewElements.shell.removeAttribute("hidden");
+      planReviewElements.shell.setAttribute("aria-hidden", "false");
+      if (document.body) {
+        document.body.classList.add("has-plan-review");
+      }
+    } else {
+      planReviewElements.shell.setAttribute("hidden", "");
+      planReviewElements.shell.setAttribute("aria-hidden", "true");
+      if (document.body) {
+        document.body.classList.remove("has-plan-review");
+      }
+    }
+  };
+
+  const setPlanReviewStatusMessage = (message, tone = "info") => {
+    if (!planReviewElements.status) return;
+    planReviewElements.status.textContent = message || "";
+    planReviewElements.status.classList.remove("is-error", "is-success");
+    if (tone === "error") {
+      planReviewElements.status.classList.add("is-error");
+    } else if (tone === "success") {
+      planReviewElements.status.classList.add("is-success");
+    }
+  };
+
+  const setPlanReviewButtonsDisabled = (disabled) => {
+    [planReviewElements.acceptButton, planReviewElements.rejectButton].forEach((button) => {
+      if (button) {
+        button.disabled = Boolean(disabled);
+        button.classList.toggle("is-disabled", Boolean(disabled));
+      }
+    });
+  };
+
+  const populatePlanReviewDetails = (record) => {
+    if (!record || !record.payload) {
+      return;
+    }
+    const plan = record.payload;
+    if (planReviewElements.title) {
+      planReviewElements.title.textContent = plan.nombre
+        ? `Confirma el plan de ${plan.nombre}`
+        : "Confirma el plan pendiente";
+    }
+    if (planReviewElements.meta) {
+      planReviewElements.meta.textContent = formatPlanMeta(plan);
+    }
+    if (planReviewElements.alumno) {
+      planReviewElements.alumno.textContent = plan.nombre || "Sin nombre registrado";
+    }
+    if (planReviewElements.acudiente) {
+      planReviewElements.acudiente.textContent = plan.acudiente || "Sin acudiente";
+    }
+    if (planReviewElements.telefono) {
+      planReviewElements.telefono.textContent = formatPhoneDisplay(plan.telefono);
+    }
+    if (planReviewElements.dias) {
+      planReviewElements.dias.textContent = formatDaysLabel(plan.dias);
+    }
+    if (planReviewElements.hora) {
+      planReviewElements.hora.textContent = plan.hora ? `${plan.hora} hrs` : "Sin horario definido";
+    }
+    if (planReviewElements.clases) {
+      const clases = Array.isArray(plan.clases) ? plan.clases : [];
+      const completadas = clases.filter((clase) => clase?.completada).length;
+      planReviewElements.clases.textContent = `${clases.length} sesiones planificadas · ${completadas} completadas`;
+    }
+  };
+
+  const dismissPlanReview = () => {
+    if (planReviewState.isResolving) {
+      return;
+    }
+    planReviewState.pendingId = null;
+    planReviewState.record = null;
+    planReviewState.isLoading = false;
+    setPlanReviewButtonsDisabled(false);
+    setPlanReviewStatusMessage("");
+    setPlanReviewVisibility(false);
+  };
+
+  const openPlanReview = async (pendingId) => {
+    if (!pendingId || !planReviewElements.shell) {
+      return;
+    }
+
+    if (planReviewState.isLoading && planReviewState.pendingId === pendingId) {
+      setPlanReviewVisibility(true);
+      return;
+    }
+
+    planReviewState.pendingId = pendingId;
+    planReviewState.isLoading = true;
+    planReviewState.record = null;
+    setPlanReviewVisibility(true);
+    setPlanReviewButtonsDisabled(true);
+    setPlanReviewStatusMessage("Cargando el resumen del plan...");
+
+    try {
+      const response = await api.getPendingPlan(pendingId);
+      const record = response?.data;
+      if (!record) {
+        throw new Error("No encontramos la solicitud pendiente.");
+      }
+      planReviewState.record = record;
+      populatePlanReviewDetails(record);
+      setPlanReviewButtonsDisabled(false);
+      setPlanReviewStatusMessage("Revisa los detalles antes de aceptar o solicitar cambios.");
+      clearPendingQueryParam();
+    } catch (error) {
+      console.error("No se pudo cargar la solicitud pendiente", error);
+      setPlanReviewStatusMessage(error.message || "No se pudo cargar la solicitud pendiente.", "error");
+    } finally {
+      planReviewState.isLoading = false;
+    }
+  };
+
+  const handlePlanReviewDecision = async (decision) => {
+    if (!planReviewState.pendingId || planReviewState.isResolving) {
+      return;
+    }
+    planReviewState.isResolving = true;
+    setPlanReviewButtonsDisabled(true);
+    setPlanReviewStatusMessage(
+      decision === "accept" ? "Confirmando plan..." : "Registrando tu solicitud de cambios..."
+    );
+
+    try {
+      const response = await api.resolvePendingPlan(planReviewState.pendingId, decision);
+      if (response?.data) {
+        planReviewState.record = response.data;
+      }
+      const successMessage =
+        decision === "accept"
+          ? "Listo, agendamos las clases. ¡Gracias por confirmar!"
+          : "Anotamos tu solicitud de cambios. Te contactaremos pronto.";
+      setPlanReviewStatusMessage(successMessage, "success");
+      setTimeout(() => dismissPlanReview(), 3200);
+    } catch (error) {
+      console.error("No se pudo registrar la decisión del plan", error);
+      setPlanReviewStatusMessage(error.message || "No pudimos registrar tu decisión.", "error");
+      setPlanReviewButtonsDisabled(false);
+      planReviewState.isResolving = false;
+      return;
+    }
+
+    planReviewState.isResolving = false;
+  };
+
+  const handleExternalPendingId = (pendingId) => {
+    if (!pendingId) {
+      return;
+    }
+    openPlanReview(pendingId);
   };
 
   const showSection = (element) => {
@@ -719,6 +971,9 @@ document.addEventListener("DOMContentLoaded", () => {
       try {
         const pendingResponse = await api.requestPlanConfirmation(nuevoPlan);
         const pendingId = pendingResponse?.data?.pendingId || null;
+        if (!pendingId) {
+          throw new Error("No se pudo generar la solicitud pendiente. Inténtalo nuevamente.");
+        }
         const telefonoDigits = sanitizeDigits(telefonoAcudiente);
 
         if (telefonoDigits) {
@@ -838,21 +1093,47 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  if (planReviewElements.acceptButton) {
+    planReviewElements.acceptButton.addEventListener("click", () => handlePlanReviewDecision("accept"));
+  }
+
+  if (planReviewElements.rejectButton) {
+    planReviewElements.rejectButton.addEventListener("click", () => handlePlanReviewDecision("reject"));
+  }
+
+  if (planReviewElements.closeButton) {
+    planReviewElements.closeButton.addEventListener("click", dismissPlanReview);
+  }
+
+  if (planReviewElements.backdrop) {
+    planReviewElements.backdrop.addEventListener("click", dismissPlanReview);
+  }
+
   renderWeekCalendar();
   setActiveView();
   updateHorarioVisibility();
 
+  const initialPendingId = getPendingIdFromQuery();
+  if (initialPendingId) {
+    openPlanReview(initialPendingId);
+  }
+
   if (typeof navigator !== "undefined" && navigator.serviceWorker) {
     navigator.serviceWorker.addEventListener("message", (event) => {
       const payload = event.data || {};
-      if (payload.type !== "push-plan-action") {
+      const payloadPendingId = payload.payload?.pendingId || payload.pendingId;
+
+      if (payload.type === "push-plan-open") {
+        handleExternalPendingId(payloadPendingId);
         return;
       }
 
-      if (payload.decision === "accept") {
-        alert("Gracias por aceptar el plan. Notificaremos a la administración.");
-      } else if (payload.decision === "reject") {
-        alert("Has rechazado el plan pendiente. Ponte en contacto con la administración si necesitas ajustes.");
+      if (payload.type === "push-plan-action") {
+        if (payload.decision === "accept") {
+          alert("Confirmaste el plan desde la notificación. Gracias por tu respuesta.");
+        } else if (payload.decision === "reject") {
+          alert("Registramos tu solicitud de ajustes. Nos pondremos en contacto.");
+        }
       }
     });
   }
