@@ -1,5 +1,5 @@
 const DEFAULT_NOTIFICATION_TITLE = "Agenda Pro";
-const FALLBACK_TARGET_URL = "/";
+const FALLBACK_TARGET_URL = "https://inalienably-disordered-bart.ngrok-free.dev/";
 const ACTION_ACCEPT_PLAN = "accept-plan";
 const ACTION_REJECT_PLAN = "reject-plan";
 

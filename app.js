@@ -2,6 +2,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const SERVICE_WORKER_PATH = "sw.js";
   const PHONE_DIGITS_MIN_LENGTH = 10;
   const PHONE_DIGITS_MAX_LENGTH = 15;
+  const DEFAULT_PUBLIC_BASE_URL = "https://inalienably-disordered-bart.ngrok-free.dev";
 
   const authScreen = document.getElementById("auth-screen");
   const appShell = document.getElementById("app-shell");
@@ -59,7 +60,14 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     const metaBase = document.querySelector('meta[name="backend-base-url"]')?.content;
-    const candidates = [window.__BACKEND_BASE_URL__, window.__API_BASE_URL__, metaBase, storedBase, window.location?.origin];
+    const candidates = [
+      window.__BACKEND_BASE_URL__,
+      window.__API_BASE_URL__,
+      metaBase,
+      storedBase,
+      window.location?.origin,
+      DEFAULT_PUBLIC_BASE_URL,
+    ];
     const selected = candidates.find((candidate) => typeof candidate === "string" && candidate.trim().length);
     if (!selected) {
       return "";
@@ -76,9 +84,13 @@ document.addEventListener("DOMContentLoaded", () => {
     return normalized;
   };
 
-  const BACKEND_BASE_URL = resolveBackendBaseUrl();
+  let BACKEND_BASE_URL = resolveBackendBaseUrl();
+  if (!BACKEND_BASE_URL) {
+    BACKEND_BASE_URL = DEFAULT_PUBLIC_BASE_URL;
+  }
   const API_BASE_URL = `${BACKEND_BASE_URL}/api`;
   const PUSH_BASE_URL = `${BACKEND_BASE_URL}/push`;
+  const APP_PUBLIC_URL = BACKEND_BASE_URL;
 
   const apiFetch = async (url, options = {}) => {
     const response = await fetch(url, options);
@@ -720,7 +732,7 @@ document.addEventListener("DOMContentLoaded", () => {
                   pendingId,
                   telefono: telefonoDigits,
                   alumno: nombreAlumno,
-                  url: `${window.location.origin}?pending=${pendingId || ""}`,
+                  url: `${APP_PUBLIC_URL}?pending=${pendingId || ""}`,
                 },
               },
             });

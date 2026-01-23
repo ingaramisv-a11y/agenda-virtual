@@ -1,57 +1,82 @@
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
-const axios = require('axios');
+const path = require('path');
 const webpush = require('web-push');
 const {
-  createPlan,
   searchPlan,
   toggleClase,
   deletePlan,
-  upsertParentContact,
-  getContactByPhone,
-  savePendingPlan,
-  attachMessageToPending,
-  getLatestPendingByChat,
-  markPendingAsConfirmed,
-  markPendingAsRejected,
-  removePendingPlan,
   upsertPushSubscription,
   getPushSubscriptionByPhone,
   deletePushSubscriptionByPhone,
 } = require('./db');
 
 const PORT = process.env.PORT || 4000;
-const TELEGRAM_BOT_TOKEN = process.env.BOT_TOKEN;
-const TELEGRAM_API_BASE = TELEGRAM_BOT_TOKEN ? `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}` : null;
+const DEFAULT_PUBLIC_BASE_URL = 'https://inalienably-disordered-bart.ngrok-free.dev';
+
+const normalizeHttpsUrl = (value, fallback = DEFAULT_PUBLIC_BASE_URL) => {
+  if (typeof value !== 'string') {
+    return fallback;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || !trimmed.startsWith('https://')) {
+    return fallback;
+  }
+  return trimmed.replace(/\/$/, '');
+};
+
+const sanitizeOriginString = (value) => {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed || trimmed === '*') {
+    return null;
+  }
+  if (trimmed.includes('localhost')) {
+    return null;
+  }
+  if (!trimmed.startsWith('https://')) {
+    return null;
+  }
+  return trimmed.replace(/\/$/, '');
+};
+
 const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY;
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
 const VAPID_CONTACT_EMAIL = process.env.VAPID_CONTACT_EMAIL;
-const FRONTEND_BASE_URL = process.env.FRONTEND_BASE_URL || '';
-const RAW_ALLOWED_ORIGINS = process.env.APP_ALLOWED_ORIGINS || '';
+const FRONTEND_BASE_URL = normalizeHttpsUrl(process.env.FRONTEND_BASE_URL);
+const RAW_ALLOWED_ORIGINS = process.env.APP_ALLOWED_ORIGINS || FRONTEND_BASE_URL;
 const ALLOWED_ORIGINS = RAW_ALLOWED_ORIGINS.split(',')
-  .map((origin) => origin.trim())
+  .map(sanitizeOriginString)
   .filter(Boolean);
 const hasVapidConfig = Boolean(VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY && VAPID_CONTACT_EMAIL);
 
 if (hasVapidConfig) {
   webpush.setVapidDetails(VAPID_CONTACT_EMAIL, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
 } else {
-  console.warn('VAPID keys no configuradas. Las notificaciones push no estarán disponibles.');
+  console.warn('VAPID keys no configuradas. Las notificaciones push continuarán deshabilitadas.');
 }
 
 const app = express();
+const FRONTEND_STATIC_DIR = path.resolve(__dirname, '..');
 
 const isOriginAllowed = (origin) => {
-  if (!ALLOWED_ORIGINS.length || !origin) {
+  if (!ALLOWED_ORIGINS.length) {
     return true;
   }
-  return ALLOWED_ORIGINS.some((allowed) => {
-    if (allowed === '*') {
-      return true;
-    }
-    return allowed === origin;
-  });
+
+  // Allow undefined/null origins (e.g., same-origin navigation, service worker fetches)
+  if (origin === undefined || origin === null) {
+    return true;
+  }
+
+  const normalizedOrigin = sanitizeOriginString(origin);
+  if (!normalizedOrigin) {
+    return false;
+  }
+  return ALLOWED_ORIGINS.includes(normalizedOrigin);
 };
 
 const corsOptions = {
@@ -59,7 +84,8 @@ const corsOptions = {
     if (isOriginAllowed(origin)) {
       callback(null, true);
     } else {
-      callback(new Error(`Origin ${origin} is not allowed by CORS`));
+      const displayOrigin = origin ?? 'undefined';
+      callback(new Error(`Origin ${displayOrigin} is not allowed by CORS`));
     }
   },
   credentials: true,
@@ -67,11 +93,20 @@ const corsOptions = {
 
 app.use(cors(corsOptions));
 app.use(express.json());
+app.use(express.static(FRONTEND_STATIC_DIR));
 
-const confirmationKeyboard = {
-  keyboard: [[{ text: 'SI' }, { text: 'NO' }]],
-  one_time_keyboard: true,
-  resize_keyboard: true,
+const pendingPlans = new Map();
+
+const savePendingPlanRecord = (payload) => {
+  const pendingId = payload.id || crypto.randomUUID();
+  const record = {
+    id: pendingId,
+    status: 'pending',
+    payload,
+    createdAt: new Date().toISOString(),
+  };
+  pendingPlans.set(pendingId, record);
+  return record;
 };
 
 const sanitizeDigits = (value = '') => value.replace(/[^0-9]/g, '');
@@ -96,18 +131,12 @@ const resolveActionUrl = (explicitUrl) => {
   if (trimmed) {
     return trimmed;
   }
-  const frontendUrl = FRONTEND_BASE_URL?.trim();
-  if (frontendUrl) {
-    return frontendUrl;
-  }
-  return '/';
+  return FRONTEND_BASE_URL || DEFAULT_PUBLIC_BASE_URL;
 };
 
 const buildPushNotificationPayload = ({ title, body, data = {}, tag, icon, badge } = {}) => {
-  const payloadData = {
-    ...data,
-    url: resolveActionUrl(data.url),
-  };
+  const payloadData = typeof data === 'object' && data !== null ? { ...data } : {};
+  payloadData.url = resolveActionUrl(payloadData.url);
 
   return {
     title: title || 'Agenda Pro',
@@ -124,45 +153,12 @@ const buildPushNotificationPayload = ({ title, body, data = {}, tag, icon, badge
   };
 };
 
-const ensureBotConfigured = () => {
-  if (!TELEGRAM_API_BASE) {
-    throw new Error('El BOT_TOKEN no está configurado en el servidor.');
-  }
-};
-
-const buildConfirmationMessage = (plan) => {
-  const dias = Array.isArray(plan.dias) && plan.dias.length ? plan.dias.join(', ') : 'sin días asignados';
-  return [
-    'Hola 👋',
-    `Alumno: *${plan.nombre}*`,
-    `Plan seleccionado: *${plan.tipoPlan} clases*`,
-    `Horario: ${dias} · ${plan.hora}`,
-    '',
-    'Responde *SI* para confirmar o *NO* para rechazar.',
-  ].join('\n');
-};
-
-const sendTelegramMessage = async (chatId, text, extraPayload = {}) => {
-  ensureBotConfigured();
-  const payload = {
-    chat_id: chatId,
-    text,
-    parse_mode: 'Markdown',
-    ...extraPayload,
-  };
-  const { data } = await axios.post(`${TELEGRAM_API_BASE}/sendMessage`, payload);
-  if (!data?.ok) {
-    throw new Error(data?.description || 'Error desconocido al contactar Telegram');
-  }
-  return data.result;
-};
-
-if (!TELEGRAM_API_BASE) {
-  console.warn('BOT_TOKEN no configurado. El flujo de confirmación por Telegram no estará disponible.');
-}
-
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+app.get('/', (_req, res) => {
+  res.sendFile(path.join(FRONTEND_STATIC_DIR, 'index.html'));
 });
 
 const handlePushPublicKey = (_req, res) => {
@@ -270,28 +266,10 @@ const validatePlanPayload = (body) => {
   return null;
 };
 
-app.post('/api/planes/pending', async (req, res) => {
+app.post('/api/planes/pending', (req, res) => {
   const validationError = validatePlanPayload(req.body);
   if (validationError) {
     return res.status(400).json({ error: validationError });
-  }
-
-  if (!TELEGRAM_API_BASE) {
-    return res.status(503).json({ error: 'El BOT_TOKEN no está configurado en el servidor.' });
-  }
-
-  const telefonoOriginal = req.body.telefono;
-  const contacto = getContactByPhone(telefonoOriginal);
-  if (!contacto) {
-    return res.status(409).json({
-      error:
-        'El acudiente aún no ha registrado su chat en Telegram. Pídale que envíe "REGISTRAR <su teléfono>" al bot para habilitar las confirmaciones.',
-    });
-  }
-
-  const pendingActual = getLatestPendingByChat(contacto.chatId);
-  if (pendingActual && pendingActual.status === 'pending') {
-    return res.status(409).json({ error: 'Ya existe una confirmación pendiente para este acudiente.' });
   }
 
   const planPayload = {
@@ -299,38 +277,15 @@ app.post('/api/planes/pending', async (req, res) => {
     nombre: req.body.nombre,
     edad: Number(req.body.edad) || null,
     acudiente: req.body.acudiente,
-    telefono: telefonoOriginal,
+    telefono: req.body.telefono,
     tipoPlan: Number(req.body.tipoPlan),
     dias: req.body.dias,
     hora: req.body.hora,
     clases: req.body.clases,
   };
 
-  const pendingId = crypto.randomUUID();
-  const pendingRecord = savePendingPlan({
-    id: pendingId,
-    telefono: telefonoOriginal,
-    chatId: contacto.chatId,
-    payload: planPayload,
-  });
-
-  if (!pendingRecord) {
-    return res.status(400).json({ error: 'No se pudo preparar la solicitud de confirmación.' });
-  }
-
-  try {
-    const telegramMessage = await sendTelegramMessage(contacto.chatId, buildConfirmationMessage(planPayload), {
-      reply_markup: confirmationKeyboard,
-    });
-    if (telegramMessage?.message_id) {
-      attachMessageToPending(pendingId, telegramMessage.message_id);
-    }
-    res.status(202).json({ data: { pendingId, status: 'waiting-confirmation' } });
-  } catch (error) {
-    console.error('Error enviando confirmación a Telegram', error?.response?.data || error.message);
-    removePendingPlan(pendingId);
-    res.status(502).json({ error: 'No se pudo enviar la confirmación por Telegram.' });
-  }
+  const pendingRecord = savePendingPlanRecord(planPayload);
+  res.status(202).json({ data: { pendingId: pendingRecord.id, status: pendingRecord.status } });
 });
 
 app.post('/api/planes', (_req, res) => {
@@ -388,120 +343,12 @@ app.delete('/api/planes/:id', (req, res) => {
   }
 });
 
-app.post('/webhooks/telegram', async (req, res) => {
-  res.sendStatus(200);
-  if (!TELEGRAM_API_BASE) {
-    return;
-  }
-
-  try {
-    await handleTelegramUpdate(req.body);
-  } catch (error) {
-    console.error('Error procesando actualización de Telegram', error);
-  }
-});
-
-const handleTelegramUpdate = async (update) => {
-  const message = update.message || update.edited_message;
-  if (!message || !message.text) {
-    return;
-  }
-
-  const chatId = String(message.chat.id);
-  const text = message.text.trim();
-
-  if (/^\/start/i.test(text)) {
-    await sendTelegramMessage(
-      chatId,
-      'Hola, soy la agenda de Profe Diana. Escribe *REGISTRAR <tu teléfono>* para enlazarte y luego responde SI o NO cuando recibas nuevas solicitudes.'
-    );
-    return;
-  }
-
-  const registrarMatch = text.match(/^(?:\/)?(?:registrar|registro)\s+(\+?\d[\d\s-]+)/i);
-  if (registrarMatch) {
-    await handleRegisterCommand(chatId, registrarMatch[1]);
-    return;
-  }
-
-  const normalized = text.toUpperCase();
-  if (normalized === 'SI') {
-    await confirmPendingPlanForChat(chatId);
-    return;
-  }
-
-  if (normalized === 'NO') {
-    await rejectPendingPlanForChat(chatId);
-    return;
-  }
-
-  await sendTelegramMessage(
-    chatId,
-    'No entendí tu mensaje. Usa *REGISTRAR <tu teléfono>* para vincularte o responde *SI* / *NO* a las solicitudes.'
-  );
-};
-
-const handleRegisterCommand = async (chatId, telefonoTexto) => {
-  const telefono = sanitizeDigits(telefonoTexto);
-  if (!telefono) {
-    await sendTelegramMessage(chatId, 'No pude leer tu número. Escríbelo así: REGISTRAR 3001234567');
-    return;
-  }
-
-  const contacto = upsertParentContact(telefono, chatId);
-  if (contacto) {
-    await sendTelegramMessage(
-      chatId,
-      `Perfecto. Guardé el número ${telefono}. Cuando Profe Diana registre un plan, podrás responder *SI* para confirmarlo.`
-    );
-  }
-};
-
-const confirmPendingPlanForChat = async (chatId) => {
-  const pending = getLatestPendingByChat(chatId);
-  if (!pending) {
-    await sendTelegramMessage(chatId, 'No tienes solicitudes pendientes en este momento.');
-    return;
-  }
-
-  if (pending.status !== 'pending') {
-    await sendTelegramMessage(chatId, 'Ya procesamos la última solicitud. Espera a que te enviemos una nueva.');
-    return;
-  }
-
-  try {
-    const planConfirmado = createPlan(pending.payload);
-    markPendingAsConfirmed(pending.id, planConfirmado.id);
-    await sendTelegramMessage(
-      chatId,
-      `¡Gracias! Confirmamos el plan de ${planConfirmado.nombre}. Nos vemos en la piscina 🏊`
-    );
-  } catch (error) {
-    console.error('Error confirmando plan', error);
-    await sendTelegramMessage(chatId, 'No pude guardar el plan. Intenta responder de nuevo en unos minutos.');
-  }
-};
-
-const rejectPendingPlanForChat = async (chatId) => {
-  const pending = getLatestPendingByChat(chatId);
-  if (!pending) {
-    await sendTelegramMessage(chatId, 'No tengo solicitudes activas para este chat.');
-    return;
-  }
-
-  if (pending.status !== 'pending') {
-    await sendTelegramMessage(chatId, 'Ya registramos tu respuesta anterior para esta solicitud.');
-    return;
-  }
-
-  markPendingAsRejected(pending.id);
-  await sendTelegramMessage(chatId, 'Perfecto, notificaremos a Profe Diana que no deseas continuar con este plan.');
-};
 
 app.use((req, res) => {
   res.status(404).json({ error: 'Ruta no encontrada.' });
 });
 
 app.listen(PORT, () => {
-  console.log(`Agenda Pro API escuchando en http://localhost:${PORT}`);
+  const publicBase = FRONTEND_BASE_URL || DEFAULT_PUBLIC_BASE_URL;
+  console.log(`Agenda Pro API lista en puerto ${PORT}. Origen permitido: ${publicBase}`);
 });
