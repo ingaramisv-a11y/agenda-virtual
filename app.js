@@ -52,18 +52,65 @@ document.addEventListener("DOMContentLoaded", () => {
     rejectButton: document.getElementById("plan-review-reject"),
     closeButton: document.getElementById("plan-review-close"),
   };
+  const classSignatureElements = {
+    shell: document.getElementById("class-signature-shell"),
+    backdrop: document.getElementById("class-signature-backdrop"),
+    closeButton: document.getElementById("class-signature-close"),
+    title: document.getElementById("class-signature-title"),
+    meta: document.getElementById("class-signature-meta"),
+    alumno: document.getElementById("class-signature-alumno"),
+    numero: document.getElementById("class-signature-numero"),
+    status: document.getElementById("class-signature-status"),
+    acceptButton: document.getElementById("class-signature-accept"),
+  };
+  const classConfirmElements = {
+    shell: document.getElementById("class-confirm-shell"),
+    title: document.getElementById("class-confirm-title"),
+    message: document.getElementById("class-confirm-message"),
+    yesButton: document.getElementById("class-confirm-yes"),
+    noButton: document.getElementById("class-confirm-no"),
+  };
 
   let planMostradoId = null;
+  let planDetalleActual = null;
   let isAuthenticated = false;
   let swRegistrationPromise = null;
   let cachedVapidPublicKey = null;
   let phoneRegistrationInFlight = false;
   let phoneRegistrationElements = null;
+  let classConfirmResolver = null;
   const planReviewState = {
     pendingId: null,
     record: null,
     isLoading: false,
     isResolving: false,
+  };
+  const classSignatureReviewState = {
+    pendingId: null,
+    planId: null,
+    claseIndex: null,
+    isLoading: false,
+    isResolving: false,
+  };
+  const pendingClassWatchers = new Map();
+
+  const getClassWatcherKey = ({ pendingId, planId, claseIndex }) => {
+    if (pendingId) {
+      return pendingId;
+    }
+    return `${planId || 'plan'}-${claseIndex}`;
+  };
+
+  const stopPendingClassWatcher = (paramsOrKey) => {
+    const key = typeof paramsOrKey === 'string' ? paramsOrKey : getClassWatcherKey(paramsOrKey || {});
+    if (!key) {
+      return;
+    }
+    const watcher = pendingClassWatchers.get(key);
+    if (watcher) {
+      clearInterval(watcher.intervalId);
+      pendingClassWatchers.delete(key);
+    }
   };
 
   const VALID_USER = "diana";
@@ -139,6 +186,19 @@ document.addEventListener("DOMContentLoaded", () => {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ decision }),
       }),
+    getPlanById: (planId) => apiFetch(`${API_BASE_URL}/planes/${planId}`),
+    requestClassSignature: (planId, claseIndex) =>
+      apiFetch(`${API_BASE_URL}/planes/${planId}/clases/${claseIndex}/firma/request`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      }),
+    getClassSignaturePending: (pendingId) => apiFetch(`${API_BASE_URL}/planes/clases/firma/${pendingId}`),
+    resolveClassSignature: ({ planId, claseIndex, pendingId, decision }) =>
+      apiFetch(`${API_BASE_URL}/planes/${planId}/clases/${claseIndex}/firma/decision`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pendingId, decision }),
+      }),
     searchPlan: (term) => apiFetch(`${API_BASE_URL}/planes?termino=${encodeURIComponent(term)}`),
     toggleClase: (planId, claseIndex) =>
       apiFetch(`${API_BASE_URL}/planes/${planId}/clases/${claseIndex}`, {
@@ -187,6 +247,35 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
       url.searchParams.delete("pending");
+      const nextUrl = `${url.pathname}${url.search}${url.hash}`;
+      window.history.replaceState({}, document.title, nextUrl);
+    } catch (_error) {
+      /* noop */
+    }
+  };
+
+  const getClassPendingIdFromQuery = () => {
+    if (typeof window === "undefined") {
+      return null;
+    }
+    try {
+      const params = new URLSearchParams(window.location.search);
+      return params.get("classPending");
+    } catch (_error) {
+      return null;
+    }
+  };
+
+  const clearClassPendingQueryParam = () => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    try {
+      const url = new URL(window.location.href);
+      if (!url.searchParams.has("classPending")) {
+        return;
+      }
+      url.searchParams.delete("classPending");
       const nextUrl = `${url.pathname}${url.search}${url.hash}`;
       window.history.replaceState({}, document.title, nextUrl);
     } catch (_error) {
@@ -313,6 +402,98 @@ document.addEventListener("DOMContentLoaded", () => {
     setPlanReviewVisibility(false);
   };
 
+  const handleClassSignatureDecisionFeedback = async ({ planId, claseIndex, decision }) => {
+    if (!isAuthenticated || !decision) {
+      return;
+    }
+
+    if (decision === 'accept') {
+      alert('Clase firmada por el tutor.');
+      return;
+    }
+
+    if (decision === 'reject') {
+      const retry = await showClassConfirm({
+        title: 'Clase rechazada',
+        message: 'La clase fue rechazada. ¿Notificar de nuevo?',
+        yesLabel: 'Sí',
+        noLabel: 'No',
+      });
+      if (retry && planId && !Number.isNaN(claseIndex)) {
+        await sendClassSignatureRequest(planId, claseIndex, { showSuccessMessage: false });
+      } else {
+        alert('La clase fue rechazada por el tutor.');
+      }
+    }
+  };
+
+  const startPendingClassWatcher = ({ planId, claseIndex, pendingId }) => {
+    if (!isAuthenticated || typeof window === 'undefined') {
+      return;
+    }
+    if (!planId || Number.isNaN(claseIndex) || claseIndex === null) {
+      return;
+    }
+
+    const key = getClassWatcherKey({ planId, claseIndex, pendingId });
+    if (pendingClassWatchers.has(key)) {
+      return;
+    }
+
+    let attempts = 0;
+    const maxAttempts = 60; // ~6 minutes with 6s interval
+
+    const checkStatus = async () => {
+      attempts += 1;
+      try {
+        const plan = await refreshPlanById(planId);
+        if (!plan) {
+          return;
+        }
+        const clase = plan.clases?.[claseIndex];
+        if (!clase) {
+          stopPendingClassWatcher(key);
+          return;
+        }
+
+        const stillPending =
+          clase.firmaEstado === 'pendiente' && (!pendingId || !clase.firmaPendienteId || clase.firmaPendienteId === pendingId);
+        if (!stillPending) {
+          stopPendingClassWatcher(key);
+          const decision = clase.firmaEstado === 'firmada'
+            ? 'accept'
+            : clase.firmaEstado === 'rechazada'
+              ? 'reject'
+              : null;
+          await handleClassSignatureDecisionFeedback({ planId, claseIndex, decision });
+          return;
+        }
+
+        if (attempts >= maxAttempts) {
+          stopPendingClassWatcher(key);
+        }
+      } catch (error) {
+        console.error('No se pudo verificar la firma de la clase', error);
+      }
+    };
+
+    const intervalId = window.setInterval(checkStatus, 6000);
+    pendingClassWatchers.set(key, { intervalId });
+    checkStatus();
+  };
+
+  const trackPlanPendingClasses = (plan) => {
+    if (!isAuthenticated || !plan || !Array.isArray(plan.clases)) {
+      return;
+    }
+
+    plan.clases.forEach((clase, index) => {
+      if (clase.firmaEstado === 'pendiente' && clase.firmaPendienteId) {
+        startPendingClassWatcher({ planId: plan.id, claseIndex: index, pendingId: clase.firmaPendienteId });
+      }
+    });
+  };
+
   const openPlanReview = async (pendingId) => {
     if (!pendingId || !planReviewElements.shell) {
       return;
@@ -386,6 +567,318 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
     openPlanReview(pendingId);
+  };
+
+  const setClassSignatureVisibility = (isVisible) => {
+    if (!classSignatureElements.shell) return;
+    if (isVisible) {
+      classSignatureElements.shell.removeAttribute("hidden");
+      classSignatureElements.shell.setAttribute("aria-hidden", "false");
+      if (document.body) {
+        document.body.classList.add("has-plan-review");
+      }
+    } else {
+      classSignatureElements.shell.setAttribute("hidden", "");
+      classSignatureElements.shell.setAttribute("aria-hidden", "true");
+      if (document.body) {
+        document.body.classList.remove("has-plan-review");
+      }
+    }
+  };
+
+  const setClassSignatureStatusMessage = (message, tone = "info") => {
+    if (!classSignatureElements.status) return;
+    classSignatureElements.status.textContent = message || "";
+    classSignatureElements.status.classList.remove("is-error", "is-success");
+    if (tone === "error") {
+      classSignatureElements.status.classList.add("is-error");
+    } else if (tone === "success") {
+      classSignatureElements.status.classList.add("is-success");
+    }
+  };
+
+  const setClassSignatureButtonsDisabled = (disabled) => {
+    if (classSignatureElements.acceptButton) {
+      classSignatureElements.acceptButton.disabled = Boolean(disabled);
+      classSignatureElements.acceptButton.classList.toggle("is-disabled", Boolean(disabled));
+    }
+  };
+
+  const populateClassSignatureDetails = (record) => {
+    if (!record) {
+      return;
+    }
+    if (classSignatureElements.title) {
+      classSignatureElements.title.textContent = record.alumno
+        ? `Firma la clase de ${record.alumno}`
+        : "Firma la clase";
+    }
+    if (classSignatureElements.meta) {
+      classSignatureElements.meta.textContent = `Clase #${record.claseNumero} · ${record.hora || "Horario por definir"}`;
+    }
+    if (classSignatureElements.alumno) {
+      classSignatureElements.alumno.textContent = record.alumno || "Sin nombre";
+    }
+    if (classSignatureElements.numero) {
+      classSignatureElements.numero.textContent = record.claseNumero ? `Clase ${record.claseNumero}` : "Clase en curso";
+    }
+  };
+
+  const dismissClassSignatureReview = () => {
+    if (classSignatureReviewState.isResolving) {
+      return;
+    }
+    classSignatureReviewState.pendingId = null;
+    classSignatureReviewState.planId = null;
+    classSignatureReviewState.claseIndex = null;
+    classSignatureReviewState.isLoading = false;
+    classSignatureReviewState.isResolving = false;
+    setClassSignatureButtonsDisabled(false);
+    setClassSignatureStatusMessage("");
+    setClassSignatureVisibility(false);
+  };
+
+  const openClassSignatureReview = async (pendingId) => {
+    if (!pendingId || !classSignatureElements.shell) {
+      return;
+    }
+
+    if (classSignatureReviewState.isLoading && classSignatureReviewState.pendingId === pendingId) {
+      setClassSignatureVisibility(true);
+      return;
+    }
+
+    classSignatureReviewState.pendingId = pendingId;
+    classSignatureReviewState.planId = null;
+    classSignatureReviewState.claseIndex = null;
+    classSignatureReviewState.isLoading = true;
+    setClassSignatureVisibility(true);
+    setClassSignatureButtonsDisabled(true);
+    setClassSignatureStatusMessage("Cargando los detalles de la clase...");
+
+    try {
+      const response = await api.getClassSignaturePending(pendingId);
+      const record = response?.data;
+      if (!record) {
+        throw new Error("No encontramos la solicitud de firma.");
+      }
+      classSignatureReviewState.planId = record.planId;
+      classSignatureReviewState.claseIndex = record.claseIndex;
+      populateClassSignatureDetails(record);
+      setClassSignatureButtonsDisabled(false);
+      setClassSignatureStatusMessage("Revisa los datos y firmarás la clase en un solo toque.");
+      clearClassPendingQueryParam();
+    } catch (error) {
+      console.error("No se pudo cargar la clase pendiente", error);
+      setClassSignatureStatusMessage(error.message || "No se pudo cargar la clase pendiente.", "error");
+    } finally {
+      classSignatureReviewState.isLoading = false;
+    }
+  };
+
+  const handleClassSignatureAccept = async () => {
+    const { pendingId, planId, claseIndex, isResolving } = classSignatureReviewState;
+    if (!pendingId || !planId || Number.isNaN(claseIndex) || claseIndex === null || isResolving) {
+      return;
+    }
+
+    classSignatureReviewState.isResolving = true;
+    setClassSignatureButtonsDisabled(true);
+    setClassSignatureStatusMessage("Firmando la clase...");
+
+    try {
+      await api.resolveClassSignature({ planId, claseIndex, pendingId, decision: "accept" });
+      setClassSignatureStatusMessage("Gracias, registramos tu firma.", "success");
+      refreshPlanById(planId);
+      setTimeout(() => dismissClassSignatureReview(), 2200);
+    } catch (error) {
+      console.error("No se pudo firmar la clase", error);
+      setClassSignatureStatusMessage(error.message || "No pudimos firmar la clase.", "error");
+      setClassSignatureButtonsDisabled(false);
+      classSignatureReviewState.isResolving = false;
+      return;
+    }
+
+    classSignatureReviewState.isResolving = false;
+  };
+
+  const handleExternalClassPendingId = (pendingId) => {
+    if (!pendingId) {
+      return;
+    }
+    openClassSignatureReview(pendingId);
+  };
+
+  const setPlanDetalleActual = (plan) => {
+    planDetalleActual = plan || null;
+    planMostradoId = plan?.id || null;
+  };
+
+  const refreshPlanById = async (planId) => {
+    if (!planId || !api.getPlanById) {
+      return null;
+    }
+    try {
+      const response = await api.getPlanById(planId);
+      if (response?.data) {
+        renderResultado(response.data);
+        return response.data;
+      }
+    } catch (error) {
+      console.error('No se pudo actualizar el plan solicitado', error);
+    }
+    return null;
+  };
+
+  const getClaseEstadoLabel = (clase) => {
+    if (!clase) {
+      return '';
+    }
+    switch (clase.firmaEstado) {
+      case 'firmada':
+        return 'Clase firmada por tutor';
+      case 'rechazada':
+        return 'Clase rechazada por tutor';
+      case 'pendiente':
+        return 'Firma solicitada al tutor';
+      default:
+        return '';
+    }
+  };
+
+  const getClaseEstadoClass = (clase) => {
+    if (!clase) {
+      return '';
+    }
+    if (clase.firmaEstado === 'firmada') {
+      return 'is-signed';
+    }
+    if (clase.firmaEstado === 'rechazada') {
+      return 'is-rejected';
+    }
+    if (clase.firmaEstado === 'pendiente') {
+      return 'is-pending';
+    }
+    return '';
+  };
+
+  const setClassConfirmVisibility = (isVisible) => {
+    if (!classConfirmElements.shell) return;
+    if (isVisible) {
+      classConfirmElements.shell.removeAttribute('hidden');
+      classConfirmElements.shell.setAttribute('aria-hidden', 'false');
+    } else {
+      classConfirmElements.shell.setAttribute('hidden', '');
+      classConfirmElements.shell.setAttribute('aria-hidden', 'true');
+    }
+  };
+
+  const resolveClassConfirm = (result) => {
+    if (classConfirmResolver) {
+      classConfirmResolver(Boolean(result));
+      classConfirmResolver = null;
+    }
+    setClassConfirmVisibility(false);
+  };
+
+  const showClassConfirm = ({
+    title = 'Confirmar acción',
+    message = '¿Deseas continuar?',
+    yesLabel = 'Sí',
+    noLabel = 'No',
+  } = {}) => {
+    if (!classConfirmElements.shell) {
+      const fallbackDecision = typeof window !== 'undefined' ? window.confirm(message) : false;
+      return Promise.resolve(fallbackDecision);
+    }
+
+    if (classConfirmElements.title) {
+      classConfirmElements.title.textContent = title;
+    }
+    if (classConfirmElements.message) {
+      classConfirmElements.message.textContent = message;
+    }
+    if (classConfirmElements.yesButton) {
+      classConfirmElements.yesButton.textContent = yesLabel;
+    }
+    if (classConfirmElements.noButton) {
+      classConfirmElements.noButton.textContent = noLabel;
+    }
+
+    setClassConfirmVisibility(true);
+
+    return new Promise((resolve) => {
+      classConfirmResolver = resolve;
+    });
+  };
+
+  const sendClassSignatureRequest = async (planId, claseIndex, { showSuccessMessage = true } = {}) => {
+    if (!planId || Number.isNaN(claseIndex)) {
+      return false;
+    }
+    try {
+      const response = await api.requestClassSignature(planId, claseIndex);
+      const updatedPlan = response?.data?.plan;
+      if (updatedPlan) {
+        renderResultado(updatedPlan);
+      } else if (planMostradoId === planId) {
+        await refreshPlanById(planId);
+      }
+      if (showSuccessMessage) {
+        alert('Notificamos al tutor. Te avisaremos cuando confirme.');
+      }
+      return true;
+    } catch (error) {
+      alert(error.message);
+      return false;
+    }
+  };
+
+  const handleClassIndicatorSelection = async (planId, claseIndex) => {
+    if (!planId || Number.isNaN(claseIndex)) {
+      return;
+    }
+
+    if (!planDetalleActual || planDetalleActual.id !== planId) {
+      await refreshPlanById(planId);
+    }
+
+    const plan = planDetalleActual && planDetalleActual.id === planId ? planDetalleActual : null;
+    if (!plan) {
+      return;
+    }
+
+    const clase = plan.clases?.[claseIndex];
+    if (!clase) {
+      return;
+    }
+
+    if (clase.firmaEstado === 'pendiente') {
+      alert('Esta clase ya fue enviada al tutor. Espera su confirmación.');
+      return;
+    }
+
+    if (clase.firmaEstado === 'firmada') {
+      alert('Esta clase ya se encuentra firmada por el tutor.');
+      return;
+    }
+
+    const message = clase.firmaEstado === 'rechazada'
+      ? 'La clase fue rechazada anteriormente. ¿Deseas notificar nuevamente al tutor?'
+      : 'Confirma que deseas enviar esta clase para ser firmada por el tutor.';
+
+    const confirmed = await showClassConfirm({
+      title: 'Enviar clase a firma',
+      message,
+      yesLabel: 'Sí',
+      noLabel: 'No',
+    });
+
+    if (!confirmed) {
+      return;
+    }
+
+    await sendClassSignatureRequest(planId, claseIndex);
   };
 
   const showSection = (element) => {
@@ -807,18 +1300,25 @@ document.addEventListener("DOMContentLoaded", () => {
     if (!resultadoContenedor) return;
     if (!plan) {
       resultadoContenedor.innerHTML = '<p class="empty-state">No se encontró un plan con los datos ingresados. Verifica el nombre o número.</p>';
-      planMostradoId = null;
+      setPlanDetalleActual(null);
       return;
     }
 
     const clasesMarkup = plan.clases
-      .map(
-        (clase, index) => `
+      .map((clase, index) => {
+        const estadoTexto = getClaseEstadoLabel(clase);
+        const estadoMarkup = estadoTexto
+          ? `<span class="clase-estado ${getClaseEstadoClass(clase)}">${estadoTexto}</span>`
+          : "";
+        return `
         <li class="clase-item">
           <button type="button" class="clase-indicador ${clase.completada ? "is-completada" : ""}" data-plan-id="${plan.id}" data-clase-index="${index}" aria-pressed="${clase.completada}"></button>
-          <span>Clase ${index + 1}</span>
-        </li>`
-      )
+          <div class="clase-detalle">
+            <span>Clase ${clase.numero || index + 1}</span>
+            ${estadoMarkup}
+          </div>
+        </li>`;
+      })
       .join("");
 
     resultadoContenedor.innerHTML = `
@@ -839,11 +1339,18 @@ document.addEventListener("DOMContentLoaded", () => {
       </ul>
     `;
 
-    planMostradoId = plan.id;
+    setPlanDetalleActual(plan);
+    trackPlanPendingClasses(plan);
   };
 
   const construirClases = (cantidad) =>
-    Array.from({ length: cantidad }, (_, index) => ({ numero: index + 1, completada: false }));
+    Array.from({ length: cantidad }, (_, index) => ({
+      numero: index + 1,
+      completada: false,
+      firmaEstado: null,
+      firmaPendienteId: null,
+      firmaReintentos: 0,
+    }));
 
   const monthNames = [
     "enero",
@@ -1080,18 +1587,41 @@ document.addEventListener("DOMContentLoaded", () => {
       const { planId, claseIndex } = indicador.dataset;
       if (!planId) return;
 
-      api
-        .toggleClase(planId, claseIndex)
-        .then((response) => {
-          if (planMostradoId === response.data.id) {
-            renderResultado(response.data);
-          }
-        })
-        .catch((error) => {
-          alert(error.message);
-        });
+      const indexNumber = Number(claseIndex);
+      handleClassIndicatorSelection(planId, indexNumber);
     });
   }
+
+  if (classConfirmElements.yesButton) {
+    classConfirmElements.yesButton.addEventListener("click", () => resolveClassConfirm(true));
+  }
+
+  if (classConfirmElements.noButton) {
+    classConfirmElements.noButton.addEventListener("click", () => resolveClassConfirm(false));
+  }
+
+  if (classConfirmElements.shell) {
+    classConfirmElements.shell.addEventListener("click", (event) => {
+      if (event.target === classConfirmElements.shell) {
+        resolveClassConfirm(false);
+      }
+    });
+  }
+
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") {
+      return;
+    }
+    if (classConfirmElements.shell?.getAttribute("aria-hidden") === "false") {
+      resolveClassConfirm(false);
+    }
+    if (classSignatureElements.shell?.getAttribute("aria-hidden") === "false") {
+      dismissClassSignatureReview();
+    }
+    if (planReviewElements.shell?.getAttribute("aria-hidden") === "false") {
+      dismissPlanReview();
+    }
+  });
 
   if (planReviewElements.acceptButton) {
     planReviewElements.acceptButton.addEventListener("click", () => handlePlanReviewDecision("accept"));
@@ -1109,6 +1639,18 @@ document.addEventListener("DOMContentLoaded", () => {
     planReviewElements.backdrop.addEventListener("click", dismissPlanReview);
   }
 
+  if (classSignatureElements.acceptButton) {
+    classSignatureElements.acceptButton.addEventListener("click", handleClassSignatureAccept);
+  }
+
+  if (classSignatureElements.closeButton) {
+    classSignatureElements.closeButton.addEventListener("click", dismissClassSignatureReview);
+  }
+
+  if (classSignatureElements.backdrop) {
+    classSignatureElements.backdrop.addEventListener("click", dismissClassSignatureReview);
+  }
+
   renderWeekCalendar();
   setActiveView();
   updateHorarioVisibility();
@@ -1118,8 +1660,13 @@ document.addEventListener("DOMContentLoaded", () => {
     openPlanReview(initialPendingId);
   }
 
+  const initialClassPendingId = getClassPendingIdFromQuery();
+  if (initialClassPendingId) {
+    openClassSignatureReview(initialClassPendingId);
+  }
+
   if (typeof navigator !== "undefined" && navigator.serviceWorker) {
-    navigator.serviceWorker.addEventListener("message", (event) => {
+    navigator.serviceWorker.addEventListener("message", async (event) => {
       const payload = event.data || {};
       const payloadPendingId = payload.payload?.pendingId || payload.pendingId;
 
@@ -1128,11 +1675,53 @@ document.addEventListener("DOMContentLoaded", () => {
         return;
       }
 
+      if (payload.type === "class-signature-open") {
+        handleExternalClassPendingId(payloadPendingId);
+        return;
+      }
+
       if (payload.type === "push-plan-action") {
         if (payload.decision === "accept") {
           alert("Confirmaste el plan desde la notificación. Gracias por tu respuesta.");
         } else if (payload.decision === "reject") {
           alert("Registramos tu solicitud de ajustes. Nos pondremos en contacto.");
+        }
+        return;
+      }
+
+      if (payload.type === "class-signature-action") {
+        const planId = payload.payload?.planId;
+        const claseIndex = Number(payload.payload?.claseIndex);
+
+        if (payloadPendingId && classSignatureReviewState.pendingId === payloadPendingId) {
+          if (payload.decision === "accept") {
+            setClassSignatureStatusMessage("Gracias, registramos tu firma.", "success");
+            setTimeout(() => dismissClassSignatureReview(), 2000);
+          } else if (payload.decision === "reject") {
+            setClassSignatureStatusMessage("Rechazaste la clase desde la notificación.", "error");
+          }
+        }
+
+        if (payload.decision === "accept" && isAuthenticated) {
+          alert("Clase firmada por el tutor.");
+        }
+
+        if (payload.decision === "reject" && isAuthenticated) {
+          const retry = await showClassConfirm({
+            title: "Clase rechazada",
+            message: "La clase fue rechazada. ¿Notificar de nuevo?",
+            yesLabel: "Sí",
+            noLabel: "No",
+          });
+          if (retry && planId && !Number.isNaN(claseIndex)) {
+            await sendClassSignatureRequest(planId, claseIndex, { showSuccessMessage: false });
+          } else {
+            alert("La clase fue rechazada por el tutor.");
+          }
+        }
+
+        if (planId) {
+          refreshPlanById(planId);
         }
       }
     });

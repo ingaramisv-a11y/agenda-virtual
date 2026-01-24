@@ -2,6 +2,8 @@ const DEFAULT_NOTIFICATION_TITLE = "Agenda Pro";
 const FALLBACK_TARGET_URL = "https://inalienably-disordered-bart.ngrok-free.dev/";
 const ACTION_ACCEPT_PLAN = "accept-plan";
 const ACTION_REJECT_PLAN = "reject-plan";
+const ACTION_ACCEPT_CLASS = "accept-class";
+const ACTION_REJECT_CLASS = "reject-class";
 
 const focusOrOpenUrl = async (targetUrl = FALLBACK_TARGET_URL) => {
   const normalizedUrl = targetUrl || FALLBACK_TARGET_URL;
@@ -89,6 +91,8 @@ self.addEventListener("notificationclick", (event) => {
   const targetUrl = event.notification.data?.url || FALLBACK_TARGET_URL;
   const action = event.action;
   const pendingId = event.notification.data?.pendingId;
+  const planId = event.notification.data?.planId;
+  const claseIndex = event.notification.data?.claseIndex;
 
   if (action === ACTION_ACCEPT_PLAN || action === ACTION_REJECT_PLAN) {
     const decision = action === ACTION_ACCEPT_PLAN ? "accept" : "reject";
@@ -113,9 +117,38 @@ self.addEventListener("notificationclick", (event) => {
     return;
   }
 
+  if (action === ACTION_ACCEPT_CLASS || action === ACTION_REJECT_CLASS) {
+    const decision = action === ACTION_ACCEPT_CLASS ? "accept" : "reject";
+    event.waitUntil(
+      (async () => {
+        if (pendingId && planId && claseIndex !== undefined) {
+          try {
+            await fetch(`/api/planes/${planId}/clases/${claseIndex}/firma/decision`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ decision, pendingId }),
+            });
+          } catch (error) {
+            console.error("No se pudo registrar la firma de clase desde el Service Worker", error);
+          }
+        }
+
+        await broadcastMessage({
+          type: "class-signature-action",
+          decision,
+          payload: event.notification.data || {},
+        });
+        return focusOrOpenUrl(targetUrl);
+      })()
+    );
+    return;
+  }
+
+  const openMessageType = event.notification.data?.type === "class-signature" ? "class-signature-open" : "push-plan-open";
+
   event.waitUntil(
     Promise.all([
-      broadcastMessage({ type: "push-plan-open", payload: event.notification.data || {} }),
+      broadcastMessage({ type: openMessageType, payload: event.notification.data || {} }),
       focusOrOpenUrl(targetUrl),
     ])
   );

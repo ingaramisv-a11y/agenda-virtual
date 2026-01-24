@@ -212,5 +212,40 @@
       </div>
     </section>
   </div>
+
+  <div class="class-signature-layer" id="class-signature-shell" hidden aria-hidden="true">
+    <div class="class-signature-backdrop" id="class-signature-backdrop" aria-hidden="true"></div>
+    <section class="class-signature-card" role="dialog" aria-modal="true" aria-labelledby="class-signature-title">
+      <button type="button" class="plan-review-dismiss" id="class-signature-close" aria-label="Cerrar aviso">×</button>
+      <p class="plan-review-kicker">Firma de clase</p>
+      <h2 id="class-signature-title">Autoriza la clase</h2>
+      <p class="plan-review-meta" id="class-signature-meta">Confirma que la clase puede iniciar.</p>
+      <dl class="plan-review-details">
+        <div>
+          <dt>Alumno</dt>
+          <dd id="class-signature-alumno">--</dd>
+        </div>
+        <div>
+          <dt>Número de clase</dt>
+          <dd id="class-signature-numero">--</dd>
+        </div>
+      </dl>
+      <p class="plan-review-status" id="class-signature-status" role="status" aria-live="assertive"></p>
+      <div class="plan-review-actions">
+        <button type="button" class="primary-action" id="class-signature-accept">Firmar clase</button>
+      </div>
+    </section>
+  </div>
+
+  <div class="class-confirm-layer" id="class-confirm-shell" hidden aria-hidden="true">
+    <div class="class-confirm-card" role="dialog" aria-modal="true" aria-labelledby="class-confirm-title">
+      <h3 id="class-confirm-title">Confirmar acción</h3>
+      <p id="class-confirm-message">¿Deseas continuar?</p>
+      <div class="class-confirm-actions">
+        <button type="button" class="primary-action" id="class-confirm-yes">Sí</button>
+        <button type="button" class="ghost-btn" id="class-confirm-no">No</button>
+      </div>
+    </div>
+  </div>
 </body>
 </html>

@@ -52,9 +52,29 @@ const mapRow = (row) => {
     tipoPlan: row.tipo_plan,
     dias: JSON.parse(row.dias_json),
     hora: row.hora,
-    clases: JSON.parse(row.clases_json),
+    clases: normalizeClasesCollection(JSON.parse(row.clases_json || "[]")),
     createdAt: row.created_at,
   };
+};
+
+const normalizeClaseRecord = (clase = {}, index = 0) => {
+  const numero = typeof clase.numero === "number" ? clase.numero : index + 1;
+  return {
+    numero,
+    completada: Boolean(clase.completada),
+    firmaEstado: clase.firmaEstado || null,
+    firmaPendienteId: clase.firmaPendienteId || null,
+    firmaReintentos: Number.isFinite(clase.firmaReintentos) ? clase.firmaReintentos : 0,
+  };
+};
+
+const normalizeClasesCollection = (clasesInput = [], desiredLength = null) => {
+  const targetLength = desiredLength ?? clasesInput.length ?? 0;
+  const normalized = [];
+  for (let index = 0; index < targetLength; index += 1) {
+    normalized.push(normalizeClaseRecord(clasesInput[index], index));
+  }
+  return normalized;
 };
 
 const insertPlanStmt = db.prepare(`
@@ -98,6 +118,7 @@ const deletePushSubscriptionStmt = db.prepare(
 );
 
 const createPlan = (payload) => {
+  const normalizedClases = normalizeClasesCollection(payload.clases ?? [], Number(payload.tipoPlan) || undefined);
   const planRecord = {
     id: payload.id,
     nombre: payload.nombre,
@@ -108,7 +129,7 @@ const createPlan = (payload) => {
     tipoPlan: payload.tipoPlan,
     dias: JSON.stringify(payload.dias ?? []),
     hora: payload.hora,
-    clases: JSON.stringify(payload.clases ?? []),
+    clases: JSON.stringify(normalizedClases),
   };
 
   insertPlanStmt.run(planRecord);
@@ -129,16 +150,31 @@ const searchPlan = (term) => {
   return mapRow(row);
 };
 
+const getPlanById = (planId) => {
+  if (!planId) {
+    return null;
+  }
+  return mapRow(findByIdStmt.get(planId));
+};
+
 const toggleClase = (planId, claseIndex) => {
   const row = findByIdStmt.get(planId);
   if (!row) return null;
 
-  const clases = JSON.parse(row.clases_json);
+  const clases = normalizeClasesCollection(JSON.parse(row.clases_json));
   const clase = clases[claseIndex];
   if (!clase) return null;
 
   clase.completada = !clase.completada;
   updateClasesStmt.run(JSON.stringify(clases), planId);
+  return mapRow(findByIdStmt.get(planId));
+};
+const replacePlanClases = (planId, clases) => {
+  if (!planId || !Array.isArray(clases)) {
+    return null;
+  }
+  const normalized = normalizeClasesCollection(clases, clases.length || null);
+  updateClasesStmt.run(JSON.stringify(normalized), planId);
   return mapRow(findByIdStmt.get(planId));
 };
 
@@ -209,6 +245,8 @@ module.exports = {
   searchPlan,
   toggleClase,
   deletePlan,
+  getPlanById,
+  replacePlanClases,
   upsertPushSubscription,
   getPushSubscriptionByPhone,
   deletePushSubscriptionByPhone,

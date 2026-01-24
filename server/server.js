@@ -11,6 +11,8 @@ const {
   upsertPushSubscription,
   getPushSubscriptionByPhone,
   deletePushSubscriptionByPhone,
+  getPlanById,
+  replacePlanClases,
 } = require('./db');
 
 const PORT = process.env.PORT || 4000;
@@ -114,6 +116,25 @@ const getPendingPlanRecord = (pendingId) => pendingPlans.get(pendingId);
 
 const deletePendingPlanRecord = (pendingId) => pendingPlans.delete(pendingId);
 
+const classSignatureRequests = new Map();
+
+const saveClassSignatureRecord = ({ planId, claseIndex, phone }) => {
+  const record = {
+    id: crypto.randomUUID(),
+    planId,
+    claseIndex,
+    phone,
+    status: 'pending',
+    createdAt: new Date().toISOString(),
+  };
+  classSignatureRequests.set(record.id, record);
+  return record;
+};
+
+const getClassSignatureRecord = (pendingId) => classSignatureRequests.get(pendingId);
+
+const deleteClassSignatureRecord = (pendingId) => classSignatureRequests.delete(pendingId);
+
 const sanitizeDigits = (value = '') => value.replace(/[^0-9]/g, '');
 const isValidPushSubscription = (candidate) => {
   if (!candidate || typeof candidate !== 'object') {
@@ -129,6 +150,28 @@ const isValidPushSubscription = (candidate) => {
     }
   }
   return true;
+};
+
+const mutatePlanClase = (planId, claseIndex, mutator) => {
+  const plan = getPlanById(planId);
+  if (!plan || !Array.isArray(plan.clases)) {
+    return { plan: null, clase: null };
+  }
+
+  const clases = plan.clases.map((clase) => ({ ...clase }));
+  const clase = clases[claseIndex];
+  if (!clase) {
+    return { plan: null, clase: null };
+  }
+
+  const mutationResult = mutator(clase, claseIndex, clases, plan);
+  if (mutationResult === false) {
+    return { plan: null, clase: null };
+  }
+
+  clases[claseIndex] = clase;
+  const updatedPlan = replacePlanClases(planId, clases);
+  return { plan: updatedPlan, clase: updatedPlan ? updatedPlan.clases[claseIndex] : null };
 };
 
 const resolveActionUrl = (explicitUrl) => {
@@ -156,6 +199,38 @@ const buildPushNotificationPayload = ({ title, body, data = {}, tag, icon, badge
       { action: 'reject-plan', title: 'Rechazar plan' },
     ],
   };
+};
+
+const buildClassSignatureNotification = ({ plan, claseIndex, pendingId }) => {
+  const clase = plan?.clases?.[claseIndex];
+  const claseNumero = clase?.numero ?? claseIndex + 1;
+  return buildPushNotificationPayload({
+    title: `Confirma la clase #${claseNumero}`,
+    body: `${plan?.nombre || 'El estudiante'} está por iniciar su clase. Confirma para firmarla.`,
+    tag: `class-signature-${plan?.id || 'plan'}-${claseNumero}`,
+    data: {
+      type: 'class-signature',
+      planId: plan?.id,
+      claseIndex,
+      claseNumero,
+      alumno: plan?.nombre,
+      telefono: plan?.telefono,
+      pendingId,
+      url: `${FRONTEND_BASE_URL || DEFAULT_PUBLIC_BASE_URL}?classPending=${pendingId}`,
+    },
+    actions: [
+      { action: 'accept-class', title: 'Aceptar clase' },
+      { action: 'reject-class', title: 'Rechazar clase' },
+    ],
+  });
+};
+
+const sendClassSignatureNotification = async ({ subscriptionRecord, plan, claseIndex, pendingId }) => {
+  if (!subscriptionRecord || !subscriptionRecord.subscription) {
+    throw new Error('No existe una suscripción push para este acudiente.');
+  }
+  const payload = buildClassSignatureNotification({ plan, claseIndex, pendingId });
+  await webpush.sendNotification(subscriptionRecord.subscription, JSON.stringify(payload));
 };
 
 app.get('/health', (_req, res) => {
@@ -367,6 +442,15 @@ app.get('/api/planes', (req, res) => {
   }
 });
 
+app.get('/api/planes/:id', (req, res) => {
+  const { id } = req.params;
+  const plan = getPlanById(id);
+  if (!plan) {
+    return res.status(404).json({ error: 'No se encontró el plan solicitado.' });
+  }
+  res.json({ data: plan });
+});
+
 app.patch('/api/planes/:id/clases/:index', (req, res) => {
   const { id, index } = req.params;
   const claseIndex = Number(index);
@@ -386,6 +470,131 @@ app.patch('/api/planes/:id/clases/:index', (req, res) => {
   }
 });
 
+app.post('/api/planes/:planId/clases/:index/firma/request', async (req, res) => {
+  if (!hasVapidConfig) {
+    return res.status(503).json({ error: 'Las notificaciones push no están disponibles.' });
+  }
+
+  const { planId, index } = req.params;
+  const claseIndex = Number(index);
+  if (!planId || Number.isNaN(claseIndex) || claseIndex < 0) {
+    return res.status(400).json({ error: 'Debes enviar un identificador y número de clase válidos.' });
+  }
+
+  const plan = getPlanById(planId);
+  if (!plan) {
+    return res.status(404).json({ error: 'El plan solicitado no existe.' });
+  }
+
+  const clase = plan.clases?.[claseIndex];
+  if (!clase) {
+    return res.status(404).json({ error: 'La clase solicitada no existe en este plan.' });
+  }
+
+  if (clase.firmaEstado === 'pendiente' && clase.firmaPendienteId) {
+    return res.status(409).json({ error: 'Ya hay una solicitud pendiente para esta clase.' });
+  }
+
+  if (clase.firmaEstado === 'firmada') {
+    return res.status(409).json({ error: 'Esta clase ya fue firmada por el tutor.' });
+  }
+
+  const digits = sanitizeDigits(plan.telefono);
+  if (!digits) {
+    return res.status(400).json({ error: 'El plan no tiene un número de teléfono válido para notificar al tutor.' });
+  }
+
+  const subscriptionRecord = getPushSubscriptionByPhone(digits);
+  if (!subscriptionRecord || !subscriptionRecord.subscription) {
+    return res.status(404).json({ error: 'No existe una suscripción push activa para este tutor.' });
+  }
+
+  const pendingRecord = saveClassSignatureRecord({ planId, claseIndex, phone: digits });
+
+  const mutation = mutatePlanClase(planId, claseIndex, (claseRef) => {
+    claseRef.firmaEstado = 'pendiente';
+    claseRef.firmaPendienteId = pendingRecord.id;
+    return claseRef;
+  });
+
+  if (!mutation.plan) {
+    deleteClassSignatureRecord(pendingRecord.id);
+    return res.status(404).json({ error: 'No se pudo preparar la clase solicitada.' });
+  }
+
+  try {
+    await sendClassSignatureNotification({
+      subscriptionRecord,
+      plan: mutation.plan,
+      claseIndex,
+      pendingId: pendingRecord.id,
+    });
+    return res.status(202).json({ data: { pendingId: pendingRecord.id, plan: mutation.plan } });
+  } catch (error) {
+    console.error('Error enviando la notificación de firma de clase', error);
+    deleteClassSignatureRecord(pendingRecord.id);
+    mutatePlanClase(planId, claseIndex, (claseRef) => {
+      if (claseRef.firmaPendienteId === pendingRecord.id) {
+        claseRef.firmaEstado = null;
+        claseRef.firmaPendienteId = null;
+      }
+      return claseRef;
+    });
+    if (error.statusCode === 404 || error.statusCode === 410) {
+      deletePushSubscriptionByPhone(digits);
+      return res.status(410).json({ error: 'La suscripción ya no es válida y fue eliminada.' });
+    }
+    return res.status(502).json({ error: 'No se pudo enviar la notificación al tutor.' });
+  }
+});
+
+app.post('/api/planes/:planId/clases/:index/firma/decision', (req, res) => {
+  const { planId, index } = req.params;
+  const claseIndex = Number(index);
+  const { decision, pendingId } = req.body || {};
+
+  if (!planId || Number.isNaN(claseIndex) || claseIndex < 0) {
+    return res.status(400).json({ error: 'Debes enviar un identificador y número de clase válidos.' });
+  }
+
+  if (!['accept', 'reject'].includes(decision)) {
+    return res.status(400).json({ error: 'Debes enviar una decisión válida: accept o reject.' });
+  }
+
+  if (!pendingId) {
+    return res.status(400).json({ error: 'Falta el identificador de la solicitud pendiente.' });
+  }
+
+  const record = getClassSignatureRecord(pendingId);
+  if (record && (record.planId !== planId || record.claseIndex !== claseIndex)) {
+    return res.status(409).json({ error: 'Los datos de la solicitud pendiente no coinciden.' });
+  }
+
+  const mutation = mutatePlanClase(planId, claseIndex, (claseRef) => {
+    if (claseRef.firmaPendienteId && claseRef.firmaPendienteId !== pendingId) {
+      return false;
+    }
+    claseRef.firmaPendienteId = null;
+    if (decision === 'accept') {
+      claseRef.completada = true;
+      claseRef.firmaEstado = 'firmada';
+    } else {
+      claseRef.completada = false;
+      claseRef.firmaEstado = 'rechazada';
+      claseRef.firmaReintentos = (claseRef.firmaReintentos || 0) + 1;
+    }
+    return claseRef;
+  });
+
+  deleteClassSignatureRecord(pendingId);
+
+  if (!mutation.plan) {
+    return res.status(404).json({ error: 'No se pudo actualizar la clase solicitada.' });
+  }
+
+  res.json({ data: { plan: mutation.plan, decision } });
+});
+
 app.delete('/api/planes/:id', (req, res) => {
   const { id } = req.params;
   try {
@@ -400,6 +609,41 @@ app.delete('/api/planes/:id', (req, res) => {
   }
 });
 
+
+app.get('/api/planes/clases/firma/:pendingId', (req, res) => {
+  const { pendingId } = req.params;
+  if (!pendingId) {
+    return res.status(400).json({ error: 'Debes enviar el identificador de la solicitud pendiente.' });
+  }
+
+  const record = getClassSignatureRecord(pendingId);
+  if (!record) {
+    return res.status(404).json({ error: 'No se encontró una solicitud pendiente con el identificador proporcionado.' });
+  }
+
+  const plan = getPlanById(record.planId);
+  const clase = plan?.clases?.[record.claseIndex];
+  if (!plan || !clase) {
+    deleteClassSignatureRecord(pendingId);
+    return res.status(404).json({ error: 'No se pudo cargar la clase pendiente solicitada.' });
+  }
+
+  res.json({
+    data: {
+      pendingId: record.id,
+      status: record.status,
+      planId: record.planId,
+      claseIndex: record.claseIndex,
+      claseNumero: clase.numero || record.claseIndex + 1,
+      alumno: plan.nombre,
+      telefono: plan.telefono,
+      tipoPlan: plan.tipoPlan,
+      hora: plan.hora,
+      dias: plan.dias,
+      createdAt: record.createdAt,
+    },
+  });
+});
 
 app.use((req, res) => {
   res.status(404).json({ error: 'Ruta no encontrada.' });
