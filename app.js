@@ -79,6 +79,8 @@ document.addEventListener("DOMContentLoaded", () => {
   let phoneRegistrationInFlight = false;
   let phoneRegistrationElements = null;
   let classConfirmResolver = null;
+  let activeView = null;
+  let resetConsultaOnNextShow = true;
   const planReviewState = {
     pendingId: null,
     record: null,
@@ -714,6 +716,18 @@ document.addEventListener("DOMContentLoaded", () => {
     planMostradoId = plan?.id || null;
   };
 
+  const resetConsultaResultados = ({ clearInput = false, message = null } = {}) => {
+    const displayMessage =
+      message || "No hay resultados para mostrar. Registra un plan o realiza una búsqueda.";
+    if (consultaInput && clearInput) {
+      consultaInput.value = "";
+    }
+    if (resultadoContenedor) {
+      resultadoContenedor.innerHTML = `<p class="empty-state">${displayMessage}</p>`;
+    }
+    setPlanDetalleActual(null);
+  };
+
   const refreshPlanById = async (planId) => {
     if (!planId || !api.getPlanById) {
       return null;
@@ -1176,6 +1190,7 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   const setActiveView = (targetView = null) => {
+    const previousView = activeView;
     let resolvedView = null;
 
     viewElements.forEach((view) => {
@@ -1190,12 +1205,23 @@ document.addEventListener("DOMContentLoaded", () => {
       }
     });
 
+    activeView = resolvedView?.dataset.view || null;
+
     if (emptyView) {
       if (resolvedView) {
         hideSection(emptyView);
       } else {
         showSection(emptyView);
       }
+    }
+
+    if (previousView === "consulta" && activeView !== "consulta") {
+      resetConsultaOnNextShow = true;
+    }
+
+    if (activeView === "consulta" && resetConsultaOnNextShow) {
+      resetConsultaResultados({ clearInput: true });
+      resetConsultaOnNextShow = false;
     }
   };
 
@@ -1299,8 +1325,9 @@ document.addEventListener("DOMContentLoaded", () => {
   const renderResultado = (plan) => {
     if (!resultadoContenedor) return;
     if (!plan) {
-      resultadoContenedor.innerHTML = '<p class="empty-state">No se encontró un plan con los datos ingresados. Verifica el nombre o número.</p>';
-      setPlanDetalleActual(null);
+      resetConsultaResultados({
+        message: "No se encontró un plan con los datos ingresados. Verifica el nombre o número.",
+      });
       return;
     }
 
