@@ -96,6 +96,8 @@ const searchPlanStmt = db.prepare(`
   LIMIT 1;
 `);
 
+const listPlansStmt = db.prepare("SELECT * FROM planes ORDER BY datetime(created_at) ASC;");
+
 const findByIdStmt = db.prepare("SELECT * FROM planes WHERE id = ?");
 const updateClasesStmt = db.prepare("UPDATE planes SET clases_json = ? WHERE id = ?");
 const deletePlanStmt = db.prepare("DELETE FROM planes WHERE id = ?");
@@ -149,6 +151,8 @@ const searchPlan = (term) => {
   });
   return mapRow(row);
 };
+
+const listPlans = () => listPlansStmt.all().map(mapRow);
 
 const getPlanById = (planId) => {
   if (!planId) {
@@ -243,6 +247,7 @@ const deletePushSubscriptionByPhone = (phone) => {
 module.exports = {
   createPlan,
   searchPlan,
+  listPlans,
   toggleClase,
   deletePlan,
   getPlanById,

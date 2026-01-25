@@ -95,6 +95,11 @@ document.addEventListener("DOMContentLoaded", () => {
     isResolving: false,
   };
   const pendingClassWatchers = new Map();
+  const scheduleState = {
+    planes: [],
+    lastFetchedAt: 0,
+    isLoading: false,
+  };
 
   const getClassWatcherKey = ({ pendingId, planId, claseIndex }) => {
     if (pendingId) {
@@ -189,6 +194,7 @@ document.addEventListener("DOMContentLoaded", () => {
         body: JSON.stringify({ decision }),
       }),
     getPlanById: (planId) => apiFetch(`${API_BASE_URL}/planes/${planId}`),
+    listPlans: () => apiFetch(`${API_BASE_URL}/planes/agenda`),
     requestClassSignature: (planId, claseIndex) =>
       apiFetch(`${API_BASE_URL}/planes/${planId}/clases/${claseIndex}/firma/request`, {
         method: "POST",
@@ -552,6 +558,9 @@ document.addEventListener("DOMContentLoaded", () => {
           ? "Listo, agendamos las clases. ¡Gracias por confirmar!"
           : "Anotamos tu solicitud de cambios. Te contactaremos pronto.";
       setPlanReviewStatusMessage(successMessage, "success");
+      if (decision === "accept") {
+        refreshHorarioAgenda({ force: true });
+      }
       setTimeout(() => dismissPlanReview(), 3200);
     } catch (error) {
       console.error("No se pudo registrar la decisión del plan", error);
@@ -1404,6 +1413,60 @@ document.addEventListener("DOMContentLoaded", () => {
     "sábado",
   ];
 
+  const calendarDayKeys = [
+    "domingo",
+    "lunes",
+    "martes",
+    "miercoles",
+    "jueves",
+    "viernes",
+    "sabado",
+  ];
+
+  const normalizeDayKey = (value = "") =>
+    value
+      .toString()
+      .trim()
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-zñ]/g, "");
+
+  const buildAgendaByDay = (plans = []) => {
+    const agenda = calendarDayKeys.reduce((acc, key) => {
+      acc[key] = [];
+      return acc;
+    }, {});
+
+    plans.forEach((plan) => {
+      const dias = Array.isArray(plan?.dias) ? plan.dias : [];
+      const hora = typeof plan?.hora === "string" && plan.hora.trim().length ? plan.hora.trim() : "--:--";
+      const nombre = plan?.nombre || "Alumno sin nombre";
+
+      dias.forEach((dia) => {
+        const normalizedKey = normalizeDayKey(dia);
+        if (!agenda[normalizedKey]) {
+          return;
+        }
+        agenda[normalizedKey].push({ id: plan.id, nombre, hora });
+      });
+    });
+
+    Object.values(agenda).forEach((entries) => {
+      entries.sort((a, b) => {
+        const left = /^\d/.test(a.hora) ? a.hora : "99:99";
+        const right = /^\d/.test(b.hora) ? b.hora : "99:99";
+        const timeComparison = left.localeCompare(right);
+        if (timeComparison !== 0) {
+          return timeComparison;
+        }
+        return a.nombre.localeCompare(b.nombre);
+      });
+    });
+
+    return agenda;
+  };
+
   const TARGET_YEAR = 2026;
 
   const getReferenceToday = () => {
@@ -1430,7 +1493,7 @@ document.addEventListener("DOMContentLoaded", () => {
     return { today, visibleDays };
   };
 
-  const renderWeekCalendar = () => {
+  const renderWeekCalendar = (plans = scheduleState.planes || []) => {
     if (!weekGrid || !weekLabel || !weekRange) return;
     const { today, visibleDays } = getVisibleWeekDays();
     const monthName = monthNames[today.getMonth()];
@@ -1442,6 +1505,8 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
+    const agendaByDay = buildAgendaByDay(plans);
+
     const firstVisible = visibleDays[0];
     const lastVisible = visibleDays[visibleDays.length - 1];
     weekRange.textContent = `Del ${firstVisible.getDate()} al ${lastVisible.getDate()} de ${monthName}`;
@@ -1450,11 +1515,28 @@ document.addEventListener("DOMContentLoaded", () => {
       .map((date) => {
         const isToday = date.getDate() === today.getDate();
         const status = isToday ? "Hoy" : "Día transcurrido";
+        const dayKey = calendarDayKeys[date.getDay()];
+        const dayAgenda = agendaByDay[dayKey] || [];
+        const agendaMarkup = dayAgenda.length
+          ? `<ul class="day-agenda">${dayAgenda
+              .map(
+                (item) => `
+                  <li>
+                    <span class="agenda-name">${item.nombre}</span>
+                    <span class="agenda-time">${item.hora}</span>
+                  </li>
+                `
+              )
+              .join("")}
+            </ul>`
+          : '<p class="day-empty">Sin clases programadas</p>';
+
         return `
           <div class="day-card ${isToday ? "is-today" : ""}">
             <p class="day-name">${dayNames[date.getDay()]}</p>
             <span class="day-number">${date.getDate()}</span>
             <span class="day-status">${status}</span>
+            ${agendaMarkup}
           </div>
         `;
       })
@@ -1462,6 +1544,46 @@ document.addEventListener("DOMContentLoaded", () => {
 
     weekGrid.innerHTML = markup;
   };
+
+  async function refreshHorarioAgenda({ force = false } = {}) {
+    if (!weekGrid || !api.listPlans) {
+      return;
+    }
+    if (!isAuthenticated) {
+      scheduleState.planes = [];
+      scheduleState.lastFetchedAt = 0;
+      renderWeekCalendar([]);
+      return;
+    }
+    if (scheduleState.isLoading) {
+      return;
+    }
+    const cacheIsFresh =
+      !force &&
+      scheduleState.planes.length &&
+      scheduleState.lastFetchedAt &&
+      Date.now() - scheduleState.lastFetchedAt < 60 * 1000;
+    if (cacheIsFresh) {
+      renderWeekCalendar(scheduleState.planes);
+      return;
+    }
+
+    scheduleState.isLoading = true;
+    weekGrid.innerHTML = '<p class="empty-state">Actualizando horario...</p>';
+
+    try {
+      const response = await api.listPlans();
+      const planes = Array.isArray(response?.data) ? response.data : [];
+      scheduleState.planes = planes;
+      scheduleState.lastFetchedAt = Date.now();
+      renderWeekCalendar(planes);
+    } catch (error) {
+      console.error("No se pudo cargar el horario", error);
+      weekGrid.innerHTML = '<p class="empty-state">No se pudo cargar el horario. Inténtalo más tarde.</p>';
+    } finally {
+      scheduleState.isLoading = false;
+    }
+  }
 
   if (planForm) {
     planForm.addEventListener("submit", async (event) => {
@@ -1570,14 +1692,14 @@ document.addEventListener("DOMContentLoaded", () => {
   }
 
   if (openHorarioButton && horarioCard) {
-    openHorarioButton.addEventListener("click", () => {
+    openHorarioButton.addEventListener("click", async () => {
       if (!isAuthenticated) {
         setAuthStatusMessage("Inicia sesión para visualizar el horario semanal.");
         return;
       }
-      renderWeekCalendar();
       setActiveView("horario");
       setActiveNavButton(openHorarioButton);
+      await refreshHorarioAgenda({ force: true });
     });
   }
 
@@ -1601,6 +1723,7 @@ document.addEventListener("DOMContentLoaded", () => {
           .then(() => {
             renderResultado(null);
             alert("Plan eliminado correctamente.");
+            refreshHorarioAgenda({ force: true });
           })
           .catch((error) => {
             alert(error.message);
@@ -1710,6 +1833,9 @@ document.addEventListener("DOMContentLoaded", () => {
       if (payload.type === "push-plan-action") {
         if (payload.decision === "accept") {
           alert("Confirmaste el plan desde la notificación. Gracias por tu respuesta.");
+          if (isAuthenticated) {
+            refreshHorarioAgenda({ force: true });
+          }
         } else if (payload.decision === "reject") {
           alert("Registramos tu solicitud de ajustes. Nos pondremos en contacto.");
         }

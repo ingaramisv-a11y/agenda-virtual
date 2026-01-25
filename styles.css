@@ -801,6 +801,42 @@ fieldset.form-days {
   color: rgba(3, 33, 61, 0.5);
 }
 
+.day-agenda {
+  list-style: none;
+  margin: 0.6rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.day-agenda li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.35rem 0.5rem;
+  border-radius: 10px;
+  background: rgba(3, 33, 61, 0.06);
+  font-size: 0.85rem;
+  color: #03213d;
+}
+
+.agenda-name {
+  font-weight: 600;
+  margin-right: 0.5rem;
+}
+
+.agenda-time {
+  font-variant-numeric: tabular-nums;
+  color: rgba(3, 33, 61, 0.7);
+}
+
+.day-empty {
+  margin: 0.6rem 0 0;
+  font-size: 0.8rem;
+  color: rgba(3, 33, 61, 0.45);
+}
+
 .day-card.is-today {
   border-color: var(--accent);
   box-shadow: 0 15px 30px rgba(58, 195, 255, 0.3);

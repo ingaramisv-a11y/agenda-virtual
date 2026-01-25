@@ -6,6 +6,7 @@ const webpush = require('web-push');
 const {
   createPlan,
   searchPlan,
+  listPlans,
   toggleClase,
   deletePlan,
   upsertPushSubscription,
@@ -439,6 +440,16 @@ app.get('/api/planes', (req, res) => {
   } catch (error) {
     console.error('Error al buscar plan', error);
     res.status(500).json({ error: 'No se pudo realizar la búsqueda.' });
+  }
+});
+
+app.get('/api/planes/agenda', (_req, res) => {
+  try {
+    const planes = listPlans();
+    res.json({ data: planes });
+  } catch (error) {
+    console.error('Error al obtener el listado de planes', error);
+    res.status(500).json({ error: 'No se pudo obtener el listado de planes.' });
   }
 });
 
