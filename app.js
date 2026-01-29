@@ -79,6 +79,7 @@ document.addEventListener("DOMContentLoaded", () => {
   let phoneRegistrationInFlight = false;
   let phoneRegistrationElements = null;
   let classConfirmResolver = null;
+  let activeSession = null;
   let activeView = null;
   let resetConsultaOnNextShow = true;
   const planReviewState = {
@@ -121,7 +122,9 @@ document.addEventListener("DOMContentLoaded", () => {
   };
 
   const VALID_USER = "diana";
-  const VALID_PASS = "12345";
+  const VALID_PASS = "nanitapool2026";
+  const ALLOWED_EMAIL = "dmor.nanis@gmail.com";
+  const SESSION_STORAGE_KEY = "agenda-auth-session";
   const sanitizeDigits = (value = "") => value.replace(/[^0-9]/g, "");
   const resolveBackendBaseUrl = () => {
     if (typeof window === "undefined") {
@@ -167,6 +170,10 @@ document.addEventListener("DOMContentLoaded", () => {
   const API_BASE_URL = `${BACKEND_BASE_URL}/api`;
   const PUSH_BASE_URL = `${BACKEND_BASE_URL}/push`;
   const APP_PUBLIC_URL = BACKEND_BASE_URL;
+  const SOCIAL_PROVIDER_URLS = {
+    google: "https://accounts.google.com/AddSession",
+    facebook: "https://www.facebook.com/login.php",
+  };
 
   const apiFetch = async (url, options = {}) => {
     const response = await fetch(url, options);
@@ -1265,6 +1272,93 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   };
 
+  const readStoredSession = () => {
+    if (typeof window === "undefined" || !window.localStorage) {
+      return null;
+    }
+    try {
+      const raw = window.localStorage.getItem(SESSION_STORAGE_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch (_error) {
+      return null;
+    }
+  };
+
+  const persistSession = (session) => {
+    if (typeof window === "undefined" || !window.localStorage) {
+      return;
+    }
+    try {
+      if (session) {
+        window.localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
+      } else {
+        window.localStorage.removeItem(SESSION_STORAGE_KEY);
+      }
+    } catch (_error) {
+      console.warn("No pudimos recordar la sesión localmente.");
+    }
+  };
+
+  const activateSession = (sessionDetails = {}, { silent = false } = {}) => {
+    const normalizedEmail = (sessionDetails.email || ALLOWED_EMAIL).trim().toLowerCase();
+    const session = {
+      username: sessionDetails.username || VALID_USER,
+      email: normalizedEmail,
+      displayName: sessionDetails.displayName || "Profe Diana",
+      method: sessionDetails.method || "password",
+      loggedAt: sessionDetails.loggedAt || new Date().toISOString(),
+    };
+    activeSession = session;
+    persistSession(session);
+    const wasAuthenticated = isAuthenticated;
+    if (!wasAuthenticated) {
+      unlockAppShell();
+    }
+    if (!silent) {
+      setAuthStatusMessage(`Bienvenida, ${session.displayName}.`, true);
+    }
+    refreshHorarioAgenda({ force: true }).catch(() => {});
+  };
+
+  const attemptSessionRestore = () => {
+    const stored = readStoredSession();
+    if (stored && stored.email === ALLOWED_EMAIL && stored.username === VALID_USER) {
+      activateSession(stored, { silent: true });
+      return true;
+    }
+    return false;
+  };
+
+  const handleSocialLogin = (providerKey = "google") => {
+    const normalizedProvider = providerKey === "facebook" ? "facebook" : "google";
+    const providerName = normalizedProvider === "google" ? "Google" : "Facebook";
+    const providerUrl = SOCIAL_PROVIDER_URLS[normalizedProvider];
+    if (providerUrl && typeof window !== "undefined") {
+      try {
+        window.open(providerUrl, "_blank", "noopener");
+      } catch (error) {
+        console.warn("No se pudo abrir la ventana de autenticación", error);
+      }
+    }
+    const promptMessage = `Ingresa tu correo autorizado (${ALLOWED_EMAIL}) para continuar con ${providerName}:`;
+    const emailInput = typeof window !== "undefined" ? window.prompt(promptMessage, ALLOWED_EMAIL) : null;
+    if (!emailInput) {
+      setAuthStatusMessage("Inicio cancelado por el usuario.");
+      return;
+    }
+    const normalizedEmail = emailInput.trim().toLowerCase();
+    if (normalizedEmail !== ALLOWED_EMAIL) {
+      setAuthStatusMessage("Ese correo no tiene acceso al panel.");
+      return;
+    }
+    activateSession({
+      method: normalizedProvider,
+      email: ALLOWED_EMAIL,
+      displayName: "Profe Diana",
+      username: VALID_USER,
+    });
+  };
+
   if (authForm) {
     authForm.addEventListener("submit", (event) => {
       event.preventDefault();
@@ -1272,10 +1366,10 @@ document.addEventListener("DOMContentLoaded", () => {
       const password = authPasswordInput?.value.trim() || "";
 
       if (username === VALID_USER && password === VALID_PASS) {
-        setAuthStatusMessage("Acceso concedido.", true);
-        unlockAppShell();
+        activateSession({ method: "password", email: ALLOWED_EMAIL, displayName: "Profe Diana" });
+        authForm.reset();
       } else {
-        setAuthStatusMessage("Credenciales inválidas.");
+        setAuthStatusMessage("Credenciales inválidas. Verifica tu contraseña autorizada.");
       }
     });
   }
@@ -1288,10 +1382,11 @@ document.addEventListener("DOMContentLoaded", () => {
 
   socialButtons.forEach((button) => {
     button.addEventListener("click", () => {
-      const provider = button.dataset.socialLogin === "google" ? "Google" : "Facebook";
-      setAuthStatusMessage(`${provider} estará disponible pronto. Mientras tanto, usa tus credenciales temporales.`);
+      handleSocialLogin(button.dataset.socialLogin || "google");
     });
   });
+
+  attemptSessionRestore();
 
   const updateHorarioVisibility = () => {
     if (!horarioStep || !horaInput) return;
