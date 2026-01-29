@@ -17,15 +17,14 @@ const {
 } = require('./db');
 
 const PORT = process.env.PORT || 4000;
-const DEFAULT_PUBLIC_BASE_URL = 'https://inalienably-disordered-bart.ngrok-free.dev';
 
-const normalizeHttpsUrl = (value, fallback = DEFAULT_PUBLIC_BASE_URL) => {
+const normalizeHttpsUrl = (value) => {
   if (typeof value !== 'string') {
-    return fallback;
+    return null;
   }
   const trimmed = value.trim();
   if (!trimmed || !trimmed.startsWith('https://')) {
-    return fallback;
+    return null;
   }
   return trimmed.replace(/\/$/, '');
 };
@@ -34,28 +33,35 @@ const sanitizeOriginString = (value) => {
   if (typeof value !== 'string') {
     return null;
   }
-  const trimmed = value.trim().toLowerCase();
+  const trimmed = value.trim();
   if (!trimmed || trimmed === '*') {
     return null;
   }
-  if (trimmed.includes('localhost')) {
+  const normalized = trimmed.replace(/\/$/, '');
+  const lower = normalized.toLowerCase();
+  const isLocalhost = lower.startsWith('http://localhost') || lower.startsWith('http://127.0.0.1');
+  if (isLocalhost) {
+    return normalized;
+  }
+  if (!lower.startsWith('https://')) {
     return null;
   }
-  if (!trimmed.startsWith('https://')) {
-    return null;
-  }
-  return trimmed.replace(/\/$/, '');
+  return lower;
 };
 
 const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY;
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
 const VAPID_CONTACT_EMAIL = process.env.VAPID_CONTACT_EMAIL;
 const FRONTEND_BASE_URL = normalizeHttpsUrl(process.env.FRONTEND_BASE_URL);
-const RAW_ALLOWED_ORIGINS = process.env.APP_ALLOWED_ORIGINS || FRONTEND_BASE_URL;
+const RAW_ALLOWED_ORIGINS = process.env.APP_ALLOWED_ORIGINS || '';
 const ALLOWED_ORIGINS = RAW_ALLOWED_ORIGINS.split(',')
   .map(sanitizeOriginString)
   .filter(Boolean);
+if (FRONTEND_BASE_URL && !ALLOWED_ORIGINS.includes(FRONTEND_BASE_URL)) {
+  ALLOWED_ORIGINS.push(FRONTEND_BASE_URL);
+}
 const hasVapidConfig = Boolean(VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY && VAPID_CONTACT_EMAIL);
+const DEFAULT_ACTION_URL = '/';
 
 if (hasVapidConfig) {
   webpush.setVapidDetails(VAPID_CONTACT_EMAIL, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
@@ -180,7 +186,7 @@ const resolveActionUrl = (explicitUrl) => {
   if (trimmed) {
     return trimmed;
   }
-  return FRONTEND_BASE_URL || DEFAULT_PUBLIC_BASE_URL;
+  return FRONTEND_BASE_URL || DEFAULT_ACTION_URL;
 };
 
 const buildPushNotificationPayload = ({ title, body, data = {}, tag, icon, badge } = {}) => {
@@ -217,7 +223,7 @@ const buildClassSignatureNotification = ({ plan, claseIndex, pendingId }) => {
       alumno: plan?.nombre,
       telefono: plan?.telefono,
       pendingId,
-      url: `${FRONTEND_BASE_URL || DEFAULT_PUBLIC_BASE_URL}?classPending=${pendingId}`,
+      url: `${FRONTEND_BASE_URL || DEFAULT_ACTION_URL}?classPending=${pendingId}`,
     },
     actions: [
       { action: 'accept-class', title: 'Aceptar clase' },
@@ -661,6 +667,6 @@ app.use((req, res) => {
 });
 
 app.listen(PORT, () => {
-  const publicBase = FRONTEND_BASE_URL || DEFAULT_PUBLIC_BASE_URL;
-  console.log(`Agenda Pro API lista en puerto ${PORT}. Origen permitido: ${publicBase}`);
+  const allowedOriginsDisplay = ALLOWED_ORIGINS.length ? ALLOWED_ORIGINS.join(', ') : 'cualquier origen (sin restricciones)';
+  console.log(`Agenda Pro API lista en puerto ${PORT}. Orígenes permitidos: ${allowedOriginsDisplay}`);
 });
