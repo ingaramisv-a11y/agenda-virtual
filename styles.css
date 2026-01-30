@@ -1057,6 +1057,41 @@ fieldset.form-days {
   pointer-events: none;
 }
 
+body.standalone-signature-mode {
+  min-height: 100vh;
+}
+
+body.standalone-signature-mode #auth-screen,
+body.standalone-signature-mode #app-shell,
+body.standalone-signature-mode .plan-review-layer,
+body.standalone-signature-mode .class-signature-layer,
+body.standalone-signature-mode .class-confirm-layer {
+  display: none !important;
+}
+
+.standalone-signature-view {
+  position: relative;
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1.25rem 3rem;
+  z-index: 1;
+}
+
+.standalone-signature-card {
+  max-height: none;
+  width: min(520px, 100%);
+}
+
+.standalone-signature-details div {
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.standalone-signature-actions {
+  justify-content: center;
+}
+
 .class-signature-layer {
   position: fixed;
   inset: 0;

@@ -94,8 +94,12 @@ const buildFrontendUrl = (path = '/', queryParams = {}) => {
 };
 
 const buildFrontendPlanUrl = (planId, queryParams = {}) => buildFrontendUrl(planId ? `/plan/${planId}` : '/', queryParams);
-const buildFrontendSignatureUrl = (pendingId, planId) =>
-  buildFrontendUrl('/firmar-clase', { classId: pendingId, planId });
+const buildFrontendSignatureUrl = (pendingId, planId, claseIndex) =>
+  buildFrontendUrl('/firmar-clase', {
+    classId: pendingId,
+    planId,
+    classIndex: typeof claseIndex === 'number' ? claseIndex : undefined,
+  });
 
 if (hasVapidConfig) {
   webpush.setVapidDetails(VAPID_CONTACT_EMAIL, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
@@ -256,7 +260,7 @@ const buildPushNotificationPayload = ({ title, body, data = {}, tag, icon, badge
 const buildClassSignatureNotification = ({ plan, claseIndex, pendingId }) => {
   const clase = plan?.clases?.[claseIndex];
   const claseNumero = clase?.numero ?? claseIndex + 1;
-  const planUrl = buildFrontendSignatureUrl(pendingId, plan?.id);
+  const planUrl = buildFrontendSignatureUrl(pendingId, plan?.id, claseIndex);
   return buildPushNotificationPayload({
     title: `Confirma la clase #${claseNumero}`,
     body: `${plan?.nombre || 'El estudiante'} está por iniciar su clase. Confirma para firmarla.`,

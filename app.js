@@ -70,6 +70,16 @@ document.addEventListener("DOMContentLoaded", () => {
     yesButton: document.getElementById("class-confirm-yes"),
     noButton: document.getElementById("class-confirm-no"),
   };
+  const standaloneSignatureElements = {
+    shell: document.getElementById("standalone-signature-view"),
+    title: document.getElementById("standalone-signature-title"),
+    meta: document.getElementById("standalone-signature-meta"),
+    alumno: document.getElementById("standalone-signature-alumno"),
+    clase: document.getElementById("standalone-signature-class"),
+    status: document.getElementById("standalone-signature-status"),
+    acceptButton: document.getElementById("standalone-signature-accept"),
+    rejectButton: document.getElementById("standalone-signature-reject"),
+  };
 
   let planMostradoId = null;
   let planDetalleActual = null;
@@ -100,6 +110,18 @@ document.addEventListener("DOMContentLoaded", () => {
     planes: [],
     lastFetchedAt: 0,
     isLoading: false,
+  };
+  const STANDALONE_SIGNATURE_PATH = "/firmar-clase";
+  const isStandaloneSignatureRoute =
+    typeof window !== "undefined" && window.location?.pathname?.startsWith(STANDALONE_SIGNATURE_PATH);
+  const standaloneSignatureState = {
+    pendingId: null,
+    planId: null,
+    claseIndex: null,
+    claseNumero: null,
+    alumno: null,
+    isLoading: false,
+    isResolving: false,
   };
 
   const getClassWatcherKey = ({ pendingId, planId, claseIndex }) => {
@@ -303,6 +325,29 @@ document.addEventListener("DOMContentLoaded", () => {
       window.history.replaceState({}, document.title, nextUrl);
     } catch (_error) {
       /* noop */
+    }
+  };
+
+  const parseStandaloneSignatureRouteParams = () => {
+    if (typeof window === "undefined") {
+      return {};
+    }
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const planId = params.get("planId")?.trim() || null;
+      const classIndexParam = params.get("classIndex") ?? params.get("claseIndex");
+      const classIndex = classIndexParam !== null ? Number(classIndexParam) : null;
+      const pendingId = params.get("classId") || params.get("pendingId") || params.get("classPending");
+      const classNumberParam = params.get("classNumber");
+      const classNumber = classNumberParam !== null ? Number(classNumberParam) : null;
+      return {
+        planId,
+        claseIndex: Number.isNaN(classIndex) ? null : classIndex,
+        pendingId,
+        claseNumero: Number.isNaN(classNumber) ? null : classNumber,
+      };
+    } catch (_error) {
+      return {};
     }
   };
 
@@ -628,6 +673,198 @@ document.addEventListener("DOMContentLoaded", () => {
       classSignatureElements.acceptButton.disabled = Boolean(disabled);
       classSignatureElements.acceptButton.classList.toggle("is-disabled", Boolean(disabled));
     }
+  };
+
+  const setStandaloneSignatureVisibility = (isVisible) => {
+    if (!standaloneSignatureElements.shell) {
+      return;
+    }
+    if (isVisible) {
+      standaloneSignatureElements.shell.removeAttribute("hidden");
+      standaloneSignatureElements.shell.setAttribute("aria-hidden", "false");
+      if (document.body) {
+        document.body.classList.add("standalone-signature-mode");
+      }
+    } else {
+      standaloneSignatureElements.shell.setAttribute("hidden", "");
+      standaloneSignatureElements.shell.setAttribute("aria-hidden", "true");
+      if (document.body) {
+        document.body.classList.remove("standalone-signature-mode");
+      }
+    }
+  };
+
+  const showStandaloneSignatureStatus = (message, tone = "info") => {
+    if (!standaloneSignatureElements.status) {
+      return;
+    }
+    standaloneSignatureElements.status.textContent = message || "";
+    standaloneSignatureElements.status.classList.remove("is-error", "is-success");
+    if (tone === "error") {
+      standaloneSignatureElements.status.classList.add("is-error");
+    } else if (tone === "success") {
+      standaloneSignatureElements.status.classList.add("is-success");
+    }
+  };
+
+  const setStandaloneSignatureButtonsDisabled = (disabled) => {
+    [standaloneSignatureElements.acceptButton, standaloneSignatureElements.rejectButton].forEach((button) => {
+      if (button) {
+        button.disabled = Boolean(disabled);
+        button.classList.toggle("is-disabled", Boolean(disabled));
+      }
+    });
+  };
+
+  const updateStandaloneSignatureState = (record = {}) => {
+    if (!record) {
+      return;
+    }
+    if (record.planId) {
+      standaloneSignatureState.planId = record.planId;
+    }
+    if (record.claseIndex !== undefined && record.claseIndex !== null) {
+      const parsedIndex = Number(record.claseIndex);
+      if (!Number.isNaN(parsedIndex)) {
+        standaloneSignatureState.claseIndex = parsedIndex;
+      }
+    }
+    if (record.alumno) {
+      standaloneSignatureState.alumno = record.alumno;
+    }
+    if (record.claseNumero !== undefined && record.claseNumero !== null) {
+      const parsedNumero = Number(record.claseNumero);
+      standaloneSignatureState.claseNumero = Number.isNaN(parsedNumero)
+        ? record.claseNumero
+        : parsedNumero;
+    } else if (
+      typeof standaloneSignatureState.claseNumero !== "number" &&
+      typeof standaloneSignatureState.claseIndex === "number"
+    ) {
+      standaloneSignatureState.claseNumero = standaloneSignatureState.claseIndex + 1;
+    }
+  };
+
+  const populateStandaloneSignatureSummary = (record = {}) => {
+    const alumno = record.alumno || standaloneSignatureState.alumno || "Alumno por confirmar";
+    const claseNumero =
+      record.claseNumero ??
+      standaloneSignatureState.claseNumero ??
+      (typeof standaloneSignatureState.claseIndex === "number" ? standaloneSignatureState.claseIndex + 1 : null);
+
+    if (standaloneSignatureElements.title) {
+      standaloneSignatureElements.title.textContent = alumno
+        ? `Autoriza la clase de ${alumno}`
+        : "Autoriza la clase";
+    }
+    if (standaloneSignatureElements.meta) {
+      standaloneSignatureElements.meta.textContent = claseNumero
+        ? `Clase #${claseNumero} · El instructor espera tu confirmación.`
+        : "Confirma si la clase puede iniciar.";
+    }
+    if (standaloneSignatureElements.alumno) {
+      standaloneSignatureElements.alumno.textContent = alumno || "--";
+    }
+    if (standaloneSignatureElements.clase) {
+      standaloneSignatureElements.clase.textContent = claseNumero ? `Clase #${claseNumero}` : "Pendiente";
+    }
+  };
+
+  const loadStandaloneSignatureDetails = async () => {
+    const { pendingId } = standaloneSignatureState;
+    if (!pendingId || !api.getClassSignaturePending) {
+      showStandaloneSignatureStatus("No encontramos la solicitud de clase.", "error");
+      return;
+    }
+    standaloneSignatureState.isLoading = true;
+    setStandaloneSignatureButtonsDisabled(true);
+    showStandaloneSignatureStatus("Cargando la solicitud de clase...");
+
+    try {
+      const response = await api.getClassSignaturePending(pendingId);
+      const record = response?.data;
+      if (!record) {
+        throw new Error("No encontramos la solicitud de clase.");
+      }
+      updateStandaloneSignatureState(record);
+      populateStandaloneSignatureSummary(record);
+      showStandaloneSignatureStatus("Confirma si esta clase puede iniciar.");
+      setStandaloneSignatureButtonsDisabled(false);
+    } catch (error) {
+      console.error("No se pudo cargar la clase pendiente", error);
+      showStandaloneSignatureStatus(error.message || "No se pudo cargar la clase pendiente.", "error");
+    } finally {
+      standaloneSignatureState.isLoading = false;
+    }
+  };
+
+  const handleStandaloneSignatureDecision = async (decision) => {
+    const { pendingId, planId, claseIndex, isResolving } = standaloneSignatureState;
+    if (!pendingId || !planId || claseIndex === null || Number.isNaN(claseIndex) || isResolving) {
+      showStandaloneSignatureStatus("No pudimos identificar la clase. Recarga el enlace.", "error");
+      return;
+    }
+
+    standaloneSignatureState.isResolving = true;
+    setStandaloneSignatureButtonsDisabled(true);
+    showStandaloneSignatureStatus(
+      decision === "accept" ? "Firmando la clase..." : "Registrando tu decisión..."
+    );
+
+    try {
+      await api.resolveClassSignature({ planId, claseIndex, pendingId, decision });
+      showStandaloneSignatureStatus(
+        decision === "accept"
+          ? "Listo, confirmamos que la clase se dicta."
+          : "Anotamos que esta clase no se dictará.",
+        decision === "accept" ? "success" : "error"
+      );
+    } catch (error) {
+      console.error("No se pudo registrar la decisión de la clase", error);
+      showStandaloneSignatureStatus(error.message || "No pudimos registrar tu respuesta.", "error");
+      setStandaloneSignatureButtonsDisabled(false);
+      standaloneSignatureState.isResolving = false;
+      return;
+    }
+
+    standaloneSignatureState.isResolving = false;
+  };
+
+  const bootStandaloneSignatureRoute = () => {
+    if (!isStandaloneSignatureRoute || !standaloneSignatureElements.shell) {
+      return;
+    }
+
+    const queryState = parseStandaloneSignatureRouteParams();
+    standaloneSignatureState.pendingId = queryState.pendingId || standaloneSignatureState.pendingId;
+    standaloneSignatureState.planId = queryState.planId || standaloneSignatureState.planId;
+    standaloneSignatureState.claseIndex =
+      typeof queryState.claseIndex === "number" ? queryState.claseIndex : standaloneSignatureState.claseIndex;
+    standaloneSignatureState.claseNumero =
+      typeof queryState.claseNumero === "number" && !Number.isNaN(queryState.claseNumero)
+        ? queryState.claseNumero
+        : standaloneSignatureState.claseNumero;
+
+    setStandaloneSignatureVisibility(true);
+    setStandaloneSignatureButtonsDisabled(true);
+
+    if (authScreen) {
+      authScreen.setAttribute("hidden", "");
+      authScreen.setAttribute("aria-hidden", "true");
+    }
+    if (appShell) {
+      appShell.setAttribute("hidden", "");
+      appShell.setAttribute("aria-hidden", "true");
+    }
+
+    if (!standaloneSignatureState.pendingId) {
+      showStandaloneSignatureStatus("El enlace ya no está disponible.", "error");
+      setStandaloneSignatureButtonsDisabled(true);
+      return;
+    }
+
+    populateStandaloneSignatureSummary();
+    loadStandaloneSignatureDetails();
   };
 
   const populateClassSignatureDetails = (record) => {
@@ -1904,18 +2141,36 @@ document.addEventListener("DOMContentLoaded", () => {
     classSignatureElements.backdrop.addEventListener("click", dismissClassSignatureReview);
   }
 
+  if (standaloneSignatureElements.acceptButton) {
+    standaloneSignatureElements.acceptButton.addEventListener("click", () =>
+      handleStandaloneSignatureDecision("accept")
+    );
+  }
+
+  if (standaloneSignatureElements.rejectButton) {
+    standaloneSignatureElements.rejectButton.addEventListener("click", () =>
+      handleStandaloneSignatureDecision("reject")
+    );
+  }
+
+  if (isStandaloneSignatureRoute) {
+    bootStandaloneSignatureRoute();
+  }
+
   renderWeekCalendar();
   setActiveView();
   updateHorarioVisibility();
 
-  const initialPendingId = getPendingIdFromQuery();
-  if (initialPendingId) {
-    openPlanReview(initialPendingId);
-  }
+  if (!isStandaloneSignatureRoute) {
+    const initialPendingId = getPendingIdFromQuery();
+    if (initialPendingId) {
+      openPlanReview(initialPendingId);
+    }
 
-  const initialClassPendingId = getClassPendingIdFromQuery();
-  if (initialClassPendingId) {
-    openClassSignatureReview(initialClassPendingId);
+    const initialClassPendingId = getClassPendingIdFromQuery();
+    if (initialClassPendingId) {
+      openClassSignatureReview(initialClassPendingId);
+    }
   }
 
   if (typeof navigator !== "undefined" && navigator.serviceWorker) {
@@ -1948,6 +2203,20 @@ document.addEventListener("DOMContentLoaded", () => {
       if (payload.type === "class-signature-action") {
         const planId = payload.payload?.planId;
         const claseIndex = Number(payload.payload?.claseIndex);
+
+        if (
+          isStandaloneSignatureRoute &&
+          payloadPendingId &&
+          standaloneSignatureState.pendingId === payloadPendingId
+        ) {
+          setStandaloneSignatureButtonsDisabled(true);
+          showStandaloneSignatureStatus(
+            payload.decision === "accept"
+              ? "Ya registraste tu firma. ¡Gracias por confirmar!"
+              : "Registramos que la clase no se dictará.",
+            payload.decision === "accept" ? "success" : "error"
+          );
+        }
 
         if (payloadPendingId && classSignatureReviewState.pendingId === payloadPendingId) {
           if (payload.decision === "accept") {
