@@ -54,12 +54,21 @@ const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
 const VAPID_CONTACT_EMAIL = process.env.VAPID_CONTACT_EMAIL;
 const FRONTEND_BASE_URL = normalizeHttpsUrl(process.env.FRONTEND_BASE_URL);
 const RAW_ALLOWED_ORIGINS = process.env.APP_ALLOWED_ORIGINS || '';
+const RENDER_PRODUCTION_ORIGIN = 'https://agenda-virtual-backend-di4k.onrender.com';
+
 const ALLOWED_ORIGINS = RAW_ALLOWED_ORIGINS.split(',')
   .map(sanitizeOriginString)
   .filter(Boolean);
-if (FRONTEND_BASE_URL && !ALLOWED_ORIGINS.includes(FRONTEND_BASE_URL)) {
-  ALLOWED_ORIGINS.push(FRONTEND_BASE_URL);
-}
+
+const ensureAllowedOrigin = (candidate) => {
+  const sanitized = sanitizeOriginString(candidate);
+  if (sanitized && !ALLOWED_ORIGINS.includes(sanitized)) {
+    ALLOWED_ORIGINS.push(sanitized);
+  }
+};
+
+ensureAllowedOrigin(FRONTEND_BASE_URL);
+ensureAllowedOrigin(RENDER_PRODUCTION_ORIGIN);
 const hasVapidConfig = Boolean(VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY && VAPID_CONTACT_EMAIL);
 const DEFAULT_ACTION_URL = '/';
 
