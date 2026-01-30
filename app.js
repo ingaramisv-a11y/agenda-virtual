@@ -275,7 +275,7 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     try {
       const params = new URLSearchParams(window.location.search);
-      return params.get("classPending");
+      return params.get("classPending") || params.get("classId");
     } catch (_error) {
       return null;
     }
@@ -287,10 +287,18 @@ document.addEventListener("DOMContentLoaded", () => {
     }
     try {
       const url = new URL(window.location.href);
-      if (!url.searchParams.has("classPending")) {
+      let modified = false;
+      if (url.searchParams.has("classPending")) {
+        url.searchParams.delete("classPending");
+        modified = true;
+      }
+      if (url.searchParams.has("classId")) {
+        url.searchParams.delete("classId");
+        modified = true;
+      }
+      if (!modified) {
         return;
       }
-      url.searchParams.delete("classPending");
       const nextUrl = `${url.pathname}${url.search}${url.hash}`;
       window.history.replaceState({}, document.title, nextUrl);
     } catch (_error) {

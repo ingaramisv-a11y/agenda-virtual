@@ -70,10 +70,9 @@ const ensureAllowedOrigin = (candidate) => {
 ensureAllowedOrigin(FRONTEND_BASE_URL);
 ensureAllowedOrigin(RENDER_PRODUCTION_ORIGIN);
 const hasVapidConfig = Boolean(VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY && VAPID_CONTACT_EMAIL);
-const DEFAULT_ACTION_URL = '/';
+const DEFAULT_ACTION_URL = '/firmar-clase';
 
-const buildFrontendPlanUrl = (planId, queryParams = {}) => {
-  const path = planId ? `/plan/${planId}` : '/';
+const buildFrontendUrl = (path = '/', queryParams = {}) => {
   const searchParams = new URLSearchParams();
   Object.entries(queryParams).forEach(([key, value]) => {
     if (value !== undefined && value !== null) {
@@ -93,6 +92,10 @@ const buildFrontendPlanUrl = (planId, queryParams = {}) => {
     return relativeUrl;
   }
 };
+
+const buildFrontendPlanUrl = (planId, queryParams = {}) => buildFrontendUrl(planId ? `/plan/${planId}` : '/', queryParams);
+const buildFrontendSignatureUrl = (pendingId, planId) =>
+  buildFrontendUrl('/firmar-clase', { classId: pendingId, planId });
 
 if (hasVapidConfig) {
   webpush.setVapidDetails(VAPID_CONTACT_EMAIL, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
@@ -242,7 +245,7 @@ const buildPushNotificationPayload = ({ title, body, data = {}, tag, icon, badge
 const buildClassSignatureNotification = ({ plan, claseIndex, pendingId }) => {
   const clase = plan?.clases?.[claseIndex];
   const claseNumero = clase?.numero ?? claseIndex + 1;
-  const planUrl = buildFrontendPlanUrl(plan?.id, { classPending: pendingId, planId: plan?.id });
+  const planUrl = buildFrontendSignatureUrl(pendingId, plan?.id);
   return buildPushNotificationPayload({
     title: `Confirma la clase #${claseNumero}`,
     body: `${plan?.nombre || 'El estudiante'} está por iniciar su clase. Confirma para firmarla.`,
@@ -281,6 +284,10 @@ app.get('/', (_req, res) => {
 });
 
 app.get('/plan/:planId', (_req, res) => {
+  res.sendFile(path.join(FRONTEND_STATIC_DIR, 'index.html'));
+});
+
+app.get('/firmar-clase', (_req, res) => {
   res.sendFile(path.join(FRONTEND_STATIC_DIR, 'index.html'));
 });
 

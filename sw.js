@@ -1,5 +1,5 @@
 const DEFAULT_NOTIFICATION_TITLE = "Agenda Pro";
-const FALLBACK_TARGET_URL = "https://agenda-virtual-backend-di4k.onrender.com/";
+const FALLBACK_TARGET_URL = "/firmar-clase";
 const ACTION_ACCEPT_PLAN = "accept-plan";
 const ACTION_REJECT_PLAN = "reject-plan";
 const ACTION_ACCEPT_CLASS = "accept-class";
