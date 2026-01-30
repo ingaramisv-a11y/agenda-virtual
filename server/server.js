@@ -72,6 +72,28 @@ ensureAllowedOrigin(RENDER_PRODUCTION_ORIGIN);
 const hasVapidConfig = Boolean(VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY && VAPID_CONTACT_EMAIL);
 const DEFAULT_ACTION_URL = '/';
 
+const buildFrontendPlanUrl = (planId, queryParams = {}) => {
+  const path = planId ? `/plan/${planId}` : '/';
+  const searchParams = new URLSearchParams();
+  Object.entries(queryParams).forEach(([key, value]) => {
+    if (value !== undefined && value !== null) {
+      searchParams.append(key, value);
+    }
+  });
+  const relativeUrl = `${path}${searchParams.toString() ? `?${searchParams.toString()}` : ''}`;
+
+  if (!FRONTEND_BASE_URL) {
+    return relativeUrl;
+  }
+
+  try {
+    const fullUrl = new URL(relativeUrl, FRONTEND_BASE_URL);
+    return fullUrl.toString();
+  } catch (_error) {
+    return relativeUrl;
+  }
+};
+
 if (hasVapidConfig) {
   webpush.setVapidDetails(VAPID_CONTACT_EMAIL, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
 } else {
@@ -220,6 +242,7 @@ const buildPushNotificationPayload = ({ title, body, data = {}, tag, icon, badge
 const buildClassSignatureNotification = ({ plan, claseIndex, pendingId }) => {
   const clase = plan?.clases?.[claseIndex];
   const claseNumero = clase?.numero ?? claseIndex + 1;
+  const planUrl = buildFrontendPlanUrl(plan?.id, { classPending: pendingId, planId: plan?.id });
   return buildPushNotificationPayload({
     title: `Confirma la clase #${claseNumero}`,
     body: `${plan?.nombre || 'El estudiante'} está por iniciar su clase. Confirma para firmarla.`,
@@ -232,7 +255,7 @@ const buildClassSignatureNotification = ({ plan, claseIndex, pendingId }) => {
       alumno: plan?.nombre,
       telefono: plan?.telefono,
       pendingId,
-      url: `${FRONTEND_BASE_URL || DEFAULT_ACTION_URL}?classPending=${pendingId}`,
+      url: planUrl,
     },
     actions: [
       { action: 'accept-class', title: 'Aceptar clase' },
@@ -254,6 +277,10 @@ app.get('/health', (_req, res) => {
 });
 
 app.get('/', (_req, res) => {
+  res.sendFile(path.join(FRONTEND_STATIC_DIR, 'index.html'));
+});
+
+app.get('/plan/:planId', (_req, res) => {
   res.sendFile(path.join(FRONTEND_STATIC_DIR, 'index.html'));
 });
 
