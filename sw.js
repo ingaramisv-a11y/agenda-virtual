@@ -9,20 +9,32 @@ const focusOrOpenUrl = async (targetUrl = FALLBACK_TARGET_URL) => {
   const normalizedUrl = targetUrl || FALLBACK_TARGET_URL;
   let absoluteUrl = normalizedUrl;
   try {
-    absoluteUrl = new URL(normalizedUrl, self.location.origin).href;
-  } catch (_error) {
-    absoluteUrl = normalizedUrl;
+    absoluteUrl = new URL(normalizedUrl).href;
+  } catch (_absoluteError) {
+    try {
+      absoluteUrl = new URL(normalizedUrl, self.location.origin).href;
+    } catch (_relativeError) {
+      absoluteUrl = normalizedUrl;
+    }
   }
+
   const clientsList = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
   const matchingClient = clientsList.find((client) => {
     try {
-      return client.url === absoluteUrl || client.url.includes(absoluteUrl);
+      return client.url === absoluteUrl;
     } catch (_error) {
       return false;
     }
   });
 
   if (matchingClient) {
+    try {
+      if (typeof matchingClient.navigate === "function") {
+        await matchingClient.navigate(absoluteUrl);
+      }
+    } catch (_navigateError) {
+      return self.clients.openWindow(absoluteUrl);
+    }
     await matchingClient.focus();
     return matchingClient;
   }

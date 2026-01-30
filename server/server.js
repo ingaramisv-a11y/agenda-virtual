@@ -218,9 +218,20 @@ const mutatePlanClase = (planId, claseIndex, mutator) => {
 const resolveActionUrl = (explicitUrl) => {
   const trimmed = explicitUrl?.trim();
   if (trimmed) {
-    return trimmed;
+    try {
+      return new URL(trimmed).toString();
+    } catch (_error) {
+      if (FRONTEND_BASE_URL) {
+        try {
+          return new URL(trimmed, FRONTEND_BASE_URL).toString();
+        } catch (_innerError) {
+          /* noop */
+        }
+      }
+      return trimmed;
+    }
   }
-  return FRONTEND_BASE_URL || DEFAULT_ACTION_URL;
+  return buildFrontendUrl(DEFAULT_ACTION_URL);
 };
 
 const buildPushNotificationPayload = ({ title, body, data = {}, tag, icon, badge } = {}) => {
