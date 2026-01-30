@@ -25,7 +25,7 @@ Agenda Pro is a single-page tool for **Profe Diana** to register swim plans, col
 | Variable | Purpose |
 |----------|---------|
 | `PORT` | Express port (default `4000`) |
-| `FRONTEND_BASE_URL` | Public HTTPS origin (e.g., `https://inalienably-disordered-bart.ngrok-free.dev`) |
+| `FRONTEND_BASE_URL` | Public HTTPS origin (e.g., `https://agenda-virtual-backend-di4k.onrender.com`) |
 | `APP_ALLOWED_ORIGINS` | Comma-separated list of allowed CORS origins (same as above for prod) |
 | `VAPID_PUBLIC_KEY` | Web Push VAPID public key |
 | `VAPID_PRIVATE_KEY` | Web Push VAPID private key |
@@ -50,7 +50,7 @@ Agenda Pro is a single-page tool for **Profe Diana** to register swim plans, col
    On Windows PowerShell:
 
    ```powershell
-   $env:FRONTEND_BASE_URL="https://inalienably-disordered-bart.ngrok-free.dev"
+   $env:FRONTEND_BASE_URL="https://agenda-virtual-backend-di4k.onrender.com"
    $env:APP_ALLOWED_ORIGINS=$env:FRONTEND_BASE_URL
    $env:VAPID_PUBLIC_KEY="<your-public-key>"
    $env:VAPID_PRIVATE_KEY="<your-private-key>"

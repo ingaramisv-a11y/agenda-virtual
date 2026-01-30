@@ -1,8 +1,8 @@
 document.addEventListener("DOMContentLoaded", () => {
-  const SERVICE_WORKER_PATH = "sw.js";
+  const SERVICE_WORKER_PATH = "/sw.js";
   const PHONE_DIGITS_MIN_LENGTH = 10;
   const PHONE_DIGITS_MAX_LENGTH = 15;
-  const DEFAULT_PUBLIC_BASE_URL = "https://inalienably-disordered-bart.ngrok-free.dev";
+  const DEFAULT_PUBLIC_BASE_URL = "https://agenda-virtual-backend-di4k.onrender.com";
 
   const authScreen = document.getElementById("auth-screen");
   const appShell = document.getElementById("app-shell");
