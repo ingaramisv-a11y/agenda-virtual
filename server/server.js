@@ -3,6 +3,7 @@ const cors = require('cors');
 const crypto = require('crypto');
 const path = require('path');
 const webpush = require('web-push');
+const db = require('./db');
 const {
   createPlan,
   searchPlan,
@@ -14,7 +15,8 @@ const {
   deletePushSubscriptionByPhone,
   getPlanById,
   replacePlanClases,
-} = require('./db');
+  ready: databaseReady,
+} = db;
 
 const PORT = process.env.PORT || 4000;
 
@@ -197,8 +199,8 @@ const isValidPushSubscription = (candidate) => {
   return true;
 };
 
-const mutatePlanClase = (planId, claseIndex, mutator) => {
-  const plan = getPlanById(planId);
+const mutatePlanClase = async (planId, claseIndex, mutator) => {
+  const plan = await getPlanById(planId);
   if (!plan || !Array.isArray(plan.clases)) {
     return { plan: null, clase: null };
   }
@@ -215,7 +217,7 @@ const mutatePlanClase = (planId, claseIndex, mutator) => {
   }
 
   clases[claseIndex] = clase;
-  const updatedPlan = replacePlanClases(planId, clases);
+  const updatedPlan = await replacePlanClases(planId, clases);
   return { plan: updatedPlan, clase: updatedPlan ? updatedPlan.clases[claseIndex] : null };
 };
 
@@ -313,7 +315,7 @@ const handlePushPublicKey = (_req, res) => {
   res.json({ publicKey: VAPID_PUBLIC_KEY });
 };
 
-const handlePushSubscription = (req, res) => {
+const handlePushSubscription = async (req, res) => {
   if (!hasVapidConfig) {
     return res.status(503).json({ error: 'Las notificaciones push no están disponibles.' });
   }
@@ -329,8 +331,8 @@ const handlePushSubscription = (req, res) => {
   }
 
   try {
-    const existing = getPushSubscriptionByPhone(digits);
-    const stored = upsertPushSubscription({ phone: digits, subscription });
+    const existing = await getPushSubscriptionByPhone(digits);
+    const stored = await upsertPushSubscription({ phone: digits, subscription });
     if (!stored) {
       return res.status(500).json({ error: 'No se pudo guardar la suscripción.' });
     }
@@ -356,7 +358,7 @@ const handlePushSend = async (req, res) => {
     return res.status(400).json({ error: 'Debes enviar un número de teléfono válido.' });
   }
 
-  const subscriptionRecord = getPushSubscriptionByPhone(digits);
+  const subscriptionRecord = await getPushSubscriptionByPhone(digits);
   if (!subscriptionRecord || !subscriptionRecord.subscription) {
     return res.status(404).json({ error: 'No existe una suscripción push activa para este número.' });
   }
@@ -376,7 +378,7 @@ const handlePushSend = async (req, res) => {
   } catch (error) {
     console.error('Error enviando la notificación push', error);
     if (error.statusCode === 404 || error.statusCode === 410) {
-      deletePushSubscriptionByPhone(digits);
+      await deletePushSubscriptionByPhone(digits);
       return res.status(410).json({ error: 'La suscripción ya no es válida y fue eliminada.' });
     }
     res.status(502).json({ error: 'No se pudo enviar la notificación push.' });
@@ -450,7 +452,7 @@ app.get('/api/planes/pending/:pendingId', (req, res) => {
   });
 });
 
-app.post('/api/planes/pending/:pendingId/decision', (req, res) => {
+app.post('/api/planes/pending/:pendingId/decision', async (req, res) => {
   const { pendingId } = req.params;
   const { decision } = req.body || {};
   if (!['accept', 'reject'].includes(decision)) {
@@ -474,7 +476,7 @@ app.post('/api/planes/pending/:pendingId/decision', (req, res) => {
 
   if (decision === 'accept') {
     try {
-      const plan = createPlan(record.payload);
+      const plan = await createPlan(record.payload);
       return resolveRecord('accepted', { plan });
     } catch (error) {
       console.error('Error al confirmar el plan pendiente', error);
@@ -489,14 +491,14 @@ app.post('/api/planes', (_req, res) => {
   res.status(410).json({ error: 'Esta ruta fue reemplazada por /api/planes/pending.' });
 });
 
-app.get('/api/planes', (req, res) => {
+app.get('/api/planes', async (req, res) => {
   const { termino } = req.query;
   if (!termino) {
     return res.status(400).json({ error: 'Debes enviar el parámetro "termino".' });
   }
 
   try {
-    const plan = searchPlan(termino);
+    const plan = await searchPlan(termino);
     if (!plan) {
       return res.status(404).json({ error: 'No se encontró un plan con los datos proporcionados.' });
     }
@@ -507,9 +509,9 @@ app.get('/api/planes', (req, res) => {
   }
 });
 
-app.get('/api/planes/agenda', (_req, res) => {
+app.get('/api/planes/agenda', async (_req, res) => {
   try {
-    const planes = listPlans();
+    const planes = await listPlans();
     res.json({ data: planes });
   } catch (error) {
     console.error('Error al obtener el listado de planes', error);
@@ -517,16 +519,16 @@ app.get('/api/planes/agenda', (_req, res) => {
   }
 });
 
-app.get('/api/planes/:id', (req, res) => {
+app.get('/api/planes/:id', async (req, res) => {
   const { id } = req.params;
-  const plan = getPlanById(id);
+  const plan = await getPlanById(id);
   if (!plan) {
     return res.status(404).json({ error: 'No se encontró el plan solicitado.' });
   }
   res.json({ data: plan });
 });
 
-app.patch('/api/planes/:id/clases/:index', (req, res) => {
+app.patch('/api/planes/:id/clases/:index', async (req, res) => {
   const { id, index } = req.params;
   const claseIndex = Number(index);
   if (Number.isNaN(claseIndex)) {
@@ -534,7 +536,7 @@ app.patch('/api/planes/:id/clases/:index', (req, res) => {
   }
 
   try {
-    const planActualizado = toggleClase(id, claseIndex);
+    const planActualizado = await toggleClase(id, claseIndex);
     if (!planActualizado) {
       return res.status(404).json({ error: 'No se pudo actualizar la clase solicitada.' });
     }
@@ -556,7 +558,7 @@ app.post('/api/planes/:planId/clases/:index/firma/request', async (req, res) => 
     return res.status(400).json({ error: 'Debes enviar un identificador y número de clase válidos.' });
   }
 
-  const plan = getPlanById(planId);
+  const plan = await getPlanById(planId);
   if (!plan) {
     return res.status(404).json({ error: 'El plan solicitado no existe.' });
   }
@@ -579,14 +581,14 @@ app.post('/api/planes/:planId/clases/:index/firma/request', async (req, res) => 
     return res.status(400).json({ error: 'El plan no tiene un número de teléfono válido para notificar al tutor.' });
   }
 
-  const subscriptionRecord = getPushSubscriptionByPhone(digits);
+  const subscriptionRecord = await getPushSubscriptionByPhone(digits);
   if (!subscriptionRecord || !subscriptionRecord.subscription) {
     return res.status(404).json({ error: 'No existe una suscripción push activa para este tutor.' });
   }
 
   const pendingRecord = saveClassSignatureRecord({ planId, claseIndex, phone: digits });
 
-  const mutation = mutatePlanClase(planId, claseIndex, (claseRef) => {
+  const mutation = await mutatePlanClase(planId, claseIndex, (claseRef) => {
     claseRef.firmaEstado = 'pendiente';
     claseRef.firmaPendienteId = pendingRecord.id;
     return claseRef;
@@ -608,7 +610,7 @@ app.post('/api/planes/:planId/clases/:index/firma/request', async (req, res) => 
   } catch (error) {
     console.error('Error enviando la notificación de firma de clase', error);
     deleteClassSignatureRecord(pendingRecord.id);
-    mutatePlanClase(planId, claseIndex, (claseRef) => {
+    await mutatePlanClase(planId, claseIndex, (claseRef) => {
       if (claseRef.firmaPendienteId === pendingRecord.id) {
         claseRef.firmaEstado = null;
         claseRef.firmaPendienteId = null;
@@ -616,14 +618,14 @@ app.post('/api/planes/:planId/clases/:index/firma/request', async (req, res) => 
       return claseRef;
     });
     if (error.statusCode === 404 || error.statusCode === 410) {
-      deletePushSubscriptionByPhone(digits);
+      await deletePushSubscriptionByPhone(digits);
       return res.status(410).json({ error: 'La suscripción ya no es válida y fue eliminada.' });
     }
     return res.status(502).json({ error: 'No se pudo enviar la notificación al tutor.' });
   }
 });
 
-app.post('/api/planes/:planId/clases/:index/firma/decision', (req, res) => {
+app.post('/api/planes/:planId/clases/:index/firma/decision', async (req, res) => {
   const { planId, index } = req.params;
   const claseIndex = Number(index);
   const { decision, pendingId } = req.body || {};
@@ -645,7 +647,7 @@ app.post('/api/planes/:planId/clases/:index/firma/decision', (req, res) => {
     return res.status(409).json({ error: 'Los datos de la solicitud pendiente no coinciden.' });
   }
 
-  const mutation = mutatePlanClase(planId, claseIndex, (claseRef) => {
+  const mutation = await mutatePlanClase(planId, claseIndex, (claseRef) => {
     if (claseRef.firmaPendienteId && claseRef.firmaPendienteId !== pendingId) {
       return false;
     }
@@ -670,10 +672,10 @@ app.post('/api/planes/:planId/clases/:index/firma/decision', (req, res) => {
   res.json({ data: { plan: mutation.plan, decision } });
 });
 
-app.delete('/api/planes/:id', (req, res) => {
+app.delete('/api/planes/:id', async (req, res) => {
   const { id } = req.params;
   try {
-    const planEliminado = deletePlan(id);
+    const planEliminado = await deletePlan(id);
     if (!planEliminado) {
       return res.status(404).json({ error: 'El plan solicitado no existe.' });
     }
