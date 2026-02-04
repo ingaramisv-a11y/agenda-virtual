@@ -15,6 +15,7 @@ const {
   deletePushSubscriptionByPhone,
   getPlanById,
   replacePlanClases,
+  resetPlanClases,
   ready: databaseReady,
 } = db;
 
@@ -181,6 +182,20 @@ const saveClassSignatureRecord = ({ planId, claseIndex, phone }) => {
 const getClassSignatureRecord = (pendingId) => classSignatureRequests.get(pendingId);
 
 const deleteClassSignatureRecord = (pendingId) => classSignatureRequests.delete(pendingId);
+
+const deleteClassSignatureRecordsByPlan = (planId) => {
+  if (!planId) {
+    return 0;
+  }
+  let removed = 0;
+  classSignatureRequests.forEach((record, key) => {
+    if (record.planId === planId) {
+      classSignatureRequests.delete(key);
+      removed += 1;
+    }
+  });
+  return removed;
+};
 
 const sanitizeDigits = (value = '') => value.replace(/[^0-9]/g, '');
 const isValidPushSubscription = (candidate) => {
@@ -670,6 +685,25 @@ app.post('/api/planes/:planId/clases/:index/firma/decision', async (req, res) =>
   }
 
   res.json({ data: { plan: mutation.plan, decision } });
+});
+
+app.post('/api/planes/:id/renovar', async (req, res) => {
+  const { id } = req.params;
+  if (!id) {
+    return res.status(400).json({ error: 'Debes enviar un identificador de plan válido.' });
+  }
+
+  try {
+    const updatedPlan = await resetPlanClases(id);
+    if (!updatedPlan) {
+      return res.status(404).json({ error: 'El plan solicitado no existe.' });
+    }
+    deleteClassSignatureRecordsByPlan(id);
+    return res.json({ data: updatedPlan });
+  } catch (error) {
+    console.error('Error al renovar plan', error);
+    return res.status(500).json({ error: 'No se pudo renovar el plan.' });
+  }
 });
 
 app.delete('/api/planes/:id', async (req, res) => {

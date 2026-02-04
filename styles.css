@@ -271,6 +271,30 @@ button:not(.clase-indicador):active {
   box-shadow: 0 12px 25px rgba(58, 195, 255, 0.45);
 }
 
+.plan-renewal {
+  margin-top: 1.5rem;
+  display: flex;
+  justify-content: center;
+}
+
+button.renew-plan-btn {
+  width: 100%;
+  max-width: 320px;
+  background: linear-gradient(135deg, #ff4b5c, #ff784f);
+  color: #fff;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  box-shadow: 0 25px 55px rgba(255, 75, 92, 0.4);
+}
+
+button.renew-plan-btn:hover {
+  box-shadow: 0 30px 65px rgba(255, 75, 92, 0.55);
+}
+
+button.renew-plan-btn:active {
+  box-shadow: 0 18px 35px rgba(255, 75, 92, 0.4);
+}
+
 .ghost-btn {
   text-decoration: none;
   border: 1px solid rgba(255, 255, 255, 0.6);

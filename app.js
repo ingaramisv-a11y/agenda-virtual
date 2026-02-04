@@ -247,6 +247,11 @@ document.addEventListener("DOMContentLoaded", () => {
         method: "DELETE",
         headers: { "Content-Type": "application/json" },
       }),
+    renewPlan: (planId) =>
+      apiFetch(`${API_BASE_URL}/planes/${planId}/renovar`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      }),
     getPushPublicKey: () => apiFetch(`${PUSH_BASE_URL}/public-key`),
     registerPushContact: (payload) =>
       apiFetch(`${PUSH_BASE_URL}/subscriptions`, {
@@ -1037,6 +1042,13 @@ document.addEventListener("DOMContentLoaded", () => {
     return '';
   };
 
+  const areAllClassesSigned = (plan = null) => {
+    if (!plan || !Array.isArray(plan.clases) || !plan.clases.length) {
+      return false;
+    }
+    return plan.clases.every((clase) => clase?.firmaEstado === 'firmada');
+  };
+
   const setClassConfirmVisibility = (isVisible) => {
     if (!classConfirmElements.shell) return;
     if (isVisible) {
@@ -1154,6 +1166,22 @@ document.addEventListener("DOMContentLoaded", () => {
     }
 
     await sendClassSignatureRequest(planId, claseIndex);
+  };
+
+  const renewPlan = async (planId) => {
+    if (!planId || !api.renewPlan) {
+      return;
+    }
+    try {
+      const response = await api.renewPlan(planId);
+      if (response?.data) {
+        renderResultado(response.data);
+        alert('Plan renovado. Reiniciamos todas las clases.');
+        await refreshHorarioAgenda({ force: true });
+      }
+    } catch (error) {
+      alert(error.message || 'No se pudo renovar el plan.');
+    }
   };
 
   const showSection = (element) => {
@@ -1697,6 +1725,19 @@ document.addEventListener("DOMContentLoaded", () => {
       })
       .join("");
 
+    const showRenewButton = areAllClassesSigned(plan);
+    const renewalMarkup = showRenewButton
+      ? `
+      <div class="plan-renewal">
+        <button
+          type="button"
+          class="renew-plan-btn"
+          data-renew-plan-id="${plan.id}"
+        >RENOVAR PLAN</button>
+      </div>
+    `
+      : "";
+
     resultadoContenedor.innerHTML = `
       <div class="resultado-header">
         <div class="resultado-summary">
@@ -1713,6 +1754,7 @@ document.addEventListener("DOMContentLoaded", () => {
       <ul class="lista-clases">
         ${clasesMarkup}
       </ul>
+      ${renewalMarkup}
     `;
 
     setPlanDetalleActual(plan);
@@ -2068,6 +2110,18 @@ document.addEventListener("DOMContentLoaded", () => {
           .catch((error) => {
             alert(error.message);
           });
+        return;
+      }
+
+      const renewButton = event.target.closest(".renew-plan-btn");
+      if (renewButton) {
+        const { renewPlanId } = renewButton.dataset;
+        if (!renewPlanId) return;
+        const confirmed = window.confirm(
+          "¿Quieres reiniciar el plan? Todas las clases volverán a quedar pendientes."
+        );
+        if (!confirmed) return;
+        renewPlan(renewPlanId);
         return;
       }
 

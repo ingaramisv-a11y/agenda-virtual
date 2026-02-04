@@ -249,6 +249,31 @@ const toggleClase = async (planId, claseIndex) => {
   return replacePlanClases(planId, clases);
 };
 
+const resetPlanClases = async (planId) => {
+  const plan = await getPlanById(planId);
+  if (!plan) {
+    return null;
+  }
+
+  const totalClases = Array.isArray(plan.clases) && plan.clases.length
+    ? plan.clases.length
+    : Number(plan.tipoPlan) || 0;
+
+  if (!totalClases) {
+    return plan;
+  }
+
+  const resetClases = Array.from({ length: totalClases }, (_unused, index) => ({
+    numero: index + 1,
+    completada: false,
+    firmaEstado: null,
+    firmaPendienteId: null,
+    firmaReintentos: 0,
+  }));
+
+  return replacePlanClases(planId, resetClases);
+};
+
 const deletePlan = async (planId) => {
   const plan = await getPlanById(planId);
   if (!plan) {
@@ -319,6 +344,7 @@ module.exports = {
   listPlans,
   toggleClase,
   deletePlan,
+  resetPlanClases,
   getPlanById,
   replacePlanClases,
   upsertPushSubscription,
