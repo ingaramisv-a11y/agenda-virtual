@@ -2031,6 +2031,9 @@ document.addEventListener("DOMContentLoaded", () => {
             });
           } catch (pushError) {
             console.warn("No se pudo enviar la notificación push", pushError);
+            if (pushError?.status === 404) {
+              alert("EL NUMERO DE TELEFONO NO FUE ENCONTRADO");
+            }
           }
         }
 
