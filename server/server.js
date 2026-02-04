@@ -687,7 +687,7 @@ app.delete('/api/planes/:id', async (req, res) => {
 });
 
 
-app.get('/api/planes/clases/firma/:pendingId', (req, res) => {
+app.get('/api/planes/clases/firma/:pendingId', async (req, res) => {
   const { pendingId } = req.params;
   if (!pendingId) {
     return res.status(400).json({ error: 'Debes enviar el identificador de la solicitud pendiente.' });
@@ -698,28 +698,33 @@ app.get('/api/planes/clases/firma/:pendingId', (req, res) => {
     return res.status(404).json({ error: 'No se encontró una solicitud pendiente con el identificador proporcionado.' });
   }
 
-  const plan = getPlanById(record.planId);
-  const clase = plan?.clases?.[record.claseIndex];
-  if (!plan || !clase) {
-    deleteClassSignatureRecord(pendingId);
-    return res.status(404).json({ error: 'No se pudo cargar la clase pendiente solicitada.' });
-  }
+  try {
+    const plan = await getPlanById(record.planId);
+    const clase = plan?.clases?.[record.claseIndex];
+    if (!plan || !clase) {
+      deleteClassSignatureRecord(pendingId);
+      return res.status(404).json({ error: 'No se pudo cargar la clase pendiente solicitada.' });
+    }
 
-  res.json({
-    data: {
-      pendingId: record.id,
-      status: record.status,
-      planId: record.planId,
-      claseIndex: record.claseIndex,
-      claseNumero: clase.numero || record.claseIndex + 1,
-      alumno: plan.nombre,
-      telefono: plan.telefono,
-      tipoPlan: plan.tipoPlan,
-      hora: plan.hora,
-      dias: plan.dias,
-      createdAt: record.createdAt,
-    },
-  });
+    return res.json({
+      data: {
+        pendingId: record.id,
+        status: record.status,
+        planId: record.planId,
+        claseIndex: record.claseIndex,
+        claseNumero: clase.numero || record.claseIndex + 1,
+        alumno: plan.nombre,
+        telefono: plan.telefono,
+        tipoPlan: plan.tipoPlan,
+        hora: plan.hora,
+        dias: plan.dias,
+        createdAt: record.createdAt,
+      },
+    });
+  } catch (error) {
+    console.error('Error al cargar clase pendiente', error);
+    return res.status(500).json({ error: 'No se pudo cargar la clase pendiente solicitada.' });
+  }
 });
 
 app.use((req, res) => {
