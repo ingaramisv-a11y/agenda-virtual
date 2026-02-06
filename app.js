@@ -1376,7 +1376,14 @@ document.addEventListener("DOMContentLoaded", () => {
     feedback.setAttribute("aria-live", "assertive");
 
     form.append(label, input, submitButton, feedback);
-    authRegisterButton.insertAdjacentElement("afterend", form);
+
+    if (authForm && authForm.parentElement) {
+      authForm.parentElement.insertBefore(form, authForm);
+    } else if (authRegisterButton.parentElement) {
+      authRegisterButton.parentElement.insertBefore(form, authRegisterButton);
+    } else {
+      authRegisterButton.insertAdjacentElement("beforebegin", form);
+    }
 
     form.addEventListener("submit", handlePhoneRegistrationSubmit);
 
