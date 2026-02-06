@@ -277,10 +277,16 @@ const buildPushNotificationPayload = ({ title, body, data = {}, tag, icon, badge
 const buildClassSignatureNotification = ({ plan, claseIndex, pendingId }) => {
   const clase = plan?.clases?.[claseIndex];
   const claseNumero = clase?.numero ?? claseIndex + 1;
+  const totalClases = Array.isArray(plan?.clases) ? plan.clases.length : Number(plan?.tipoPlan) || 0;
+  const isLastClass = totalClases > 0 && claseNumero === totalClases;
   const planUrl = buildFrontendSignatureUrl(pendingId, plan?.id, claseIndex);
+  const bodyBase = `${plan?.nombre || 'El estudiante'} está por iniciar su clase. Confirma para firmarla.`;
+  const body = isLastClass
+    ? `${bodyBase} RECUERDA! ESTA ES LA ULTIMA CLASE DE TU PLAN`
+    : bodyBase;
   return buildPushNotificationPayload({
     title: `Confirma la clase #${claseNumero}`,
-    body: `${plan?.nombre || 'El estudiante'} está por iniciar su clase. Confirma para firmarla.`,
+    body,
     tag: `class-signature-${plan?.id || 'plan'}-${claseNumero}`,
     data: {
       type: 'class-signature',
