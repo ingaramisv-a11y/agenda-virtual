@@ -1424,7 +1424,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
     setPhoneRegistrationVisibility(true);
     setPhoneRegistrationMessage("");
-    elements.input.focus({ preventScroll: true });
   };
 
   async function handlePhoneRegistrationSubmit(event) {
@@ -1702,7 +1701,6 @@ document.addEventListener("DOMContentLoaded", () => {
       }
       setActiveView("consulta");
       setActiveNavButton(openConsultaButton);
-      consultaInput?.focus({ preventScroll: true });
     });
   }
 
