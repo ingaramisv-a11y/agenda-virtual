@@ -1,8 +1,7 @@
 document.addEventListener("DOMContentLoaded", () => {
-  const SERVICE_WORKER_PATH = "/sw.js";
   const PHONE_DIGITS_MIN_LENGTH = 10;
-  const PHONE_DIGITS_MAX_LENGTH = 15;
   const DEFAULT_PUBLIC_BASE_URL = "https://agenda-virtual-backend-di4k.onrender.com";
+  const DEFAULT_WHATSAPP_COUNTRY_CODE = "+57";
 
   const authScreen = document.getElementById("auth-screen");
   const appShell = document.getElementById("app-shell");
@@ -84,8 +83,6 @@ document.addEventListener("DOMContentLoaded", () => {
   let planMostradoId = null;
   let planDetalleActual = null;
   let isAuthenticated = false;
-  let swRegistrationPromise = null;
-  let cachedVapidPublicKey = null;
   let phoneRegistrationInFlight = false;
   let phoneRegistrationElements = null;
   let classConfirmResolver = null;
@@ -190,7 +187,6 @@ document.addEventListener("DOMContentLoaded", () => {
     BACKEND_BASE_URL = DEFAULT_PUBLIC_BASE_URL;
   }
   const API_BASE_URL = `${BACKEND_BASE_URL}/api`;
-  const PUSH_BASE_URL = `${BACKEND_BASE_URL}/push`;
   const APP_PUBLIC_URL = BACKEND_BASE_URL;
   const SOCIAL_PROVIDER_URLS = {
     google: "https://accounts.google.com/AddSession",
@@ -252,15 +248,15 @@ document.addEventListener("DOMContentLoaded", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
       }),
-    getPushPublicKey: () => apiFetch(`${PUSH_BASE_URL}/public-key`),
-    registerPushContact: (payload) =>
-      apiFetch(`${PUSH_BASE_URL}/subscriptions`, {
+    // Legacy push endpoints now proxy WhatsApp sending; keep routes but rename helpers for clarity.
+    registerWhatsAppContact: (payload) =>
+      apiFetch(`${API_BASE_URL}/push/subscriptions`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       }),
-    sendPushNotification: (payload) =>
-      apiFetch(`${PUSH_BASE_URL}/send`, {
+    sendWhatsAppNotification: (payload) =>
+      apiFetch(`${API_BASE_URL}/push/send`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -1220,135 +1216,34 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   };
 
-  const requestNotificationPermission = async () => {
-    if (typeof window === "undefined" || !("Notification" in window)) {
-      return false;
-    }
+  // Browser push workflow was removed in favor of WhatsApp alerts.
+  const isValidE164 = (value = "") => /^\+[1-9]\d{6,14}$/.test(value);
 
-    if (Notification.permission === "granted") {
-      return true;
-    }
-
-    if (Notification.permission === "denied") {
-      return false;
-    }
-
-    try {
-      const permission = await Notification.requestPermission();
-      return permission === "granted";
-    } catch (error) {
-      console.error("No se pudo obtener el permiso de notificaciones", error);
-      return false;
-    }
-  };
-
-  const urlBase64ToUint8Array = (base64String = "") => {
-    const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
-    const normalized = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
-    const rawData = window.atob(normalized);
-    const outputArray = new Uint8Array(rawData.length);
-    for (let i = 0; i < rawData.length; i += 1) {
-      outputArray[i] = rawData.charCodeAt(i);
-    }
-    return outputArray;
-  };
-
-  const ensureServiceWorkerRegistration = async () => {
-    if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) {
+  const normalizePhoneToWhatsApp = (inputValue = "") => {
+    const raw = inputValue.trim();
+    if (!raw) {
       return null;
     }
 
-    if (!swRegistrationPromise) {
-      swRegistrationPromise = navigator.serviceWorker.register(SERVICE_WORKER_PATH).catch((error) => {
-        console.error("No se pudo registrar el service worker", error);
-        swRegistrationPromise = null;
-        throw new Error("No pudimos activar las notificaciones push en este navegador.");
-      });
+    if (raw.startsWith("+")) {
+      const digits = raw.replace(/[^0-9]/g, "");
+      const candidate = digits ? `+${digits}` : null;
+      return candidate && isValidE164(candidate) ? candidate : null;
     }
 
-    return swRegistrationPromise;
-  };
-
-  const readStaticVapidKey = () => {
-    if (
-      typeof window !== "undefined" &&
-      typeof window.__PUSH_PUBLIC_KEY__ === "string" &&
-      window.__PUSH_PUBLIC_KEY__.trim()
-    ) {
-      return window.__PUSH_PUBLIC_KEY__.trim();
+    let digits = sanitizeDigits(raw);
+    if (!digits) {
+      return null;
     }
 
-    const metaTag = document.querySelector('meta[name="vapid-public-key"]');
-    if (metaTag?.content?.trim()) {
-      return metaTag.content.trim();
+    if (digits.startsWith("00")) {
+      digits = digits.slice(2);
     }
 
-    return null;
-  };
-
-  const getVapidPublicKey = async () => {
-    if (cachedVapidPublicKey) {
-      return cachedVapidPublicKey;
-    }
-
-    const staticKey = readStaticVapidKey();
-    if (staticKey) {
-      cachedVapidPublicKey = staticKey;
-      return cachedVapidPublicKey;
-    }
-
-    if (!api.getPushPublicKey) {
-      throw new Error("No se encontró la configuración de notificaciones push.");
-    }
-
-    try {
-      const response = await api.getPushPublicKey();
-      const publicKey =
-        response?.data?.publicKey ||
-        response?.publicKey ||
-        response?.data?.vapidPublicKey ||
-        response?.vapidPublicKey ||
-        null;
-
-      if (!publicKey) {
-        throw new Error("No se pudo obtener la clave pública.");
-      }
-
-      cachedVapidPublicKey = publicKey;
-      return cachedVapidPublicKey;
-    } catch (error) {
-      console.error("No se pudo obtener la clave pública VAPID", error);
-      throw new Error("No fue posible preparar las notificaciones push.");
-    }
-  };
-
-  const getOrCreatePushSubscription = async () => {
-    if (typeof window === "undefined" || !("Notification" in window)) {
-      throw new Error("Tu navegador no soporta notificaciones push.");
-    }
-
-    const registration = await ensureServiceWorkerRegistration();
-    if (!registration || !registration.pushManager) {
-      throw new Error("No se pudo acceder al Service Worker para crear la suscripción push.");
-    }
-
-    const existingSubscription = await registration.pushManager.getSubscription();
-    if (existingSubscription) {
-      return existingSubscription;
-    }
-
-    const publicKey = await getVapidPublicKey();
-    const applicationServerKey = urlBase64ToUint8Array(publicKey);
-
-    try {
-      return await registration.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey,
-      });
-    } catch (error) {
-      console.error("No se pudo crear la suscripción push", error);
-      throw new Error("No pudimos activar las notificaciones push. Inténtalo nuevamente.");
-    }
+    const candidate = digits.length === PHONE_DIGITS_MIN_LENGTH
+      ? `${DEFAULT_WHATSAPP_COUNTRY_CODE}${digits}`
+      : `+${digits}`;
+    return isValidE164(candidate) ? candidate : null;
   };
 
   const ensurePhoneRegistrationElements = () => {
@@ -1369,12 +1264,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
     const label = document.createElement("label");
     label.setAttribute("for", "phone-registration-input");
-    label.textContent = "Número de teléfono para alertas";
+    label.textContent = "Número de WhatsApp para alertas";
 
     const input = document.createElement("input");
     input.type = "tel";
     input.id = "phone-registration-input";
-    input.placeholder = "300 123 4567";
+    input.placeholder = "+57 300 123 4567";
     input.inputMode = "tel";
     input.autocomplete = "tel";
     input.required = true;
@@ -1451,46 +1346,33 @@ document.addEventListener("DOMContentLoaded", () => {
       return;
     }
 
-    const digits = sanitizeDigits(elements.input.value);
-    if (digits.length < PHONE_DIGITS_MIN_LENGTH || digits.length > PHONE_DIGITS_MAX_LENGTH) {
+    const normalizedPhone = normalizePhoneToWhatsApp(elements.input.value);
+    if (!normalizedPhone) {
       setPhoneRegistrationMessage(
-        `Ingresa un número válido de ${PHONE_DIGITS_MIN_LENGTH} a ${PHONE_DIGITS_MAX_LENGTH} dígitos.`
+        `Ingresa un número de WhatsApp válido en formato internacional (por ejemplo, ${DEFAULT_WHATSAPP_COUNTRY_CODE} 3001234567).`
       );
       return;
     }
 
-    if (typeof window === "undefined" || !("Notification" in window)) {
-      setPhoneRegistrationMessage("Tu navegador no soporta notificaciones push.");
-      return;
-    }
-
-    if (!api.registerPushContact) {
-      setPhoneRegistrationMessage("El backend aún no admite el registro de notificaciones.");
+    if (!api.registerWhatsAppContact) {
+      setPhoneRegistrationMessage("El backend no tiene habilitado el registro de WhatsApp.");
       return;
     }
 
     phoneRegistrationInFlight = true;
     elements.submitButton.disabled = true;
-    setPhoneRegistrationMessage("Procesando registro...");
+    setPhoneRegistrationMessage("Registrando tu WhatsApp...");
 
     try {
-      const permissionGranted = await requestNotificationPermission();
-      if (!permissionGranted) {
-        throw new Error("Para continuar debes aceptar las notificaciones del navegador.");
-      }
-
-      const subscription = await getOrCreatePushSubscription();
-      const subscriptionPayload = typeof subscription.toJSON === "function" ? subscription.toJSON() : subscription;
-
-      await api.registerPushContact({
-        phone: digits,
-        subscription: subscriptionPayload,
+      await api.registerWhatsAppContact({
+        phone: normalizedPhone,
+        whatsappOptIn: true,
       });
 
-      setPhoneRegistrationMessage("Listo, guardamos tu teléfono y suscripción.", true);
+      setPhoneRegistrationMessage("Listo, guardamos tu WhatsApp para las notificaciones.", true);
       elements.form.reset();
     } catch (error) {
-      console.error("Error registrando el teléfono para notificaciones", error);
+      console.error("Error registrando el WhatsApp para notificaciones", error);
       setPhoneRegistrationMessage(error.message || "No se pudo completar el registro.");
     } finally {
       phoneRegistrationInFlight = false;
@@ -2076,27 +1958,27 @@ document.addEventListener("DOMContentLoaded", () => {
         if (!pendingId) {
           throw new Error("No se pudo generar la solicitud pendiente. Inténtalo nuevamente.");
         }
-        const telefonoDigits = sanitizeDigits(telefonoAcudiente);
+        const normalizedTutorPhone = normalizePhoneToWhatsApp(telefonoAcudiente);
 
-        if (telefonoDigits) {
+        if (normalizedTutorPhone && api.sendWhatsAppNotification) {
           try {
-            await api.sendPushNotification({
-              phone: telefonoDigits,
+            await api.sendWhatsAppNotification({
+              phone: normalizedTutorPhone,
               notification: {
                 title: `Confirma el plan de ${nombreAlumno}`,
                 body: `Selecciona aceptar para aprobar las ${tipoPlan} clases propuestas.`,
                 data: {
                   pendingId,
-                  telefono: telefonoDigits,
+                  telefono: normalizedTutorPhone,
                   alumno: nombreAlumno,
                   url: `${APP_PUBLIC_URL}?pending=${pendingId || ""}`,
                 },
               },
             });
-          } catch (pushError) {
-            console.warn("No se pudo enviar la notificación push", pushError);
-            if (pushError?.status === 404) {
-              alert("EL NUMERO DE TELEFONO NO FUE ENCONTRADO");
+          } catch (whatsappError) {
+            console.warn("No se pudo enviar la notificación de WhatsApp", whatsappError);
+            if (whatsappError?.status === 404) {
+              alert("El número de WhatsApp no se ha registrado todavía.");
             }
           }
         }
@@ -2106,7 +1988,7 @@ document.addEventListener("DOMContentLoaded", () => {
           checkbox.checked = false;
         });
         updateHorarioVisibility();
-        alert("Solicitud enviada. Espera a que el acudiente acepte la notificación para guardar el plan.");
+        alert("Solicitud enviada. Espera a que el acudiente confirme el mensaje de WhatsApp para guardar el plan.");
       } catch (error) {
         alert(error.message);
       }
@@ -2309,82 +2191,5 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   }
 
-  if (typeof navigator !== "undefined" && navigator.serviceWorker) {
-    navigator.serviceWorker.addEventListener("message", async (event) => {
-      const payload = event.data || {};
-      const payloadPendingId = payload.payload?.pendingId || payload.pendingId;
-
-      if (payload.type === "push-plan-open") {
-        handleExternalPendingId(payloadPendingId);
-        return;
-      }
-
-      if (payload.type === "class-signature-open") {
-        handleExternalClassPendingId(payloadPendingId);
-        return;
-      }
-
-      if (payload.type === "push-plan-action") {
-        if (payload.decision === "accept") {
-          alert("Confirmaste el plan desde la notificación. Gracias por tu respuesta.");
-          if (isAuthenticated) {
-            refreshHorarioAgenda({ force: true });
-          }
-        } else if (payload.decision === "reject") {
-          alert("Registramos tu solicitud de ajustes. Nos pondremos en contacto.");
-        }
-        return;
-      }
-
-      if (payload.type === "class-signature-action") {
-        const planId = payload.payload?.planId;
-        const claseIndex = Number(payload.payload?.claseIndex);
-
-        if (
-          isStandaloneSignatureRoute &&
-          payloadPendingId &&
-          standaloneSignatureState.pendingId === payloadPendingId
-        ) {
-          setStandaloneSignatureButtonsDisabled(true);
-          showStandaloneSignatureStatus(
-            payload.decision === "accept"
-              ? "Ya registraste tu firma. ¡Gracias por confirmar!"
-              : "Registramos que la clase no se dictará.",
-            payload.decision === "accept" ? "success" : "error"
-          );
-        }
-
-        if (payloadPendingId && classSignatureReviewState.pendingId === payloadPendingId) {
-          if (payload.decision === "accept") {
-            setClassSignatureStatusMessage("Gracias, registramos tu firma.", "success");
-            setTimeout(() => dismissClassSignatureReview(), 2000);
-          } else if (payload.decision === "reject") {
-            setClassSignatureStatusMessage("Rechazaste la clase desde la notificación.", "error");
-          }
-        }
-
-        if (payload.decision === "accept" && isAuthenticated) {
-          alert("Clase firmada por el tutor.");
-        }
-
-        if (payload.decision === "reject" && isAuthenticated) {
-          const retry = await showClassConfirm({
-            title: "Clase rechazada",
-            message: "La clase fue rechazada. ¿Notificar de nuevo?",
-            yesLabel: "Sí",
-            noLabel: "No",
-          });
-          if (retry && planId && !Number.isNaN(claseIndex)) {
-            await sendClassSignatureRequest(planId, claseIndex, { showSuccessMessage: false });
-          } else {
-            alert("La clase fue rechazada por el tutor.");
-          }
-        }
-
-        if (planId) {
-          refreshPlanById(planId);
-        }
-      }
-    });
-  }
+  // No service worker listeners remain because WhatsApp replaced browser push notifications.
 });
