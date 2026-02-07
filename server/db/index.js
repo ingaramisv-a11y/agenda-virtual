@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const { Pool } = require('pg');
+const { normalizeToE164 } = require('../services/whatsapp.service');
 
 const DATABASE_URL = process.env.DATABASE_URL;
 
@@ -72,11 +73,14 @@ const mapRow = (row) => {
 
 const mapPushSubscription = (row) => {
   if (!row) return null;
+  const metadata = safeJsonParse(row.subscription_json, {}) || {};
   return {
     id: row.id,
     phone: row.phone,
     sanitizedPhone: row.sanitized_phone,
-    subscription: safeJsonParse(row.subscription_json, null),
+    metadata,
+    whatsappOptIn: Boolean(metadata.whatsappOptIn),
+    normalizedPhone: metadata.normalizedPhone || row.phone,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -288,15 +292,20 @@ const deletePlan = async (planId) => {
   return plan;
 };
 
-const upsertPushSubscription = async ({ phone, subscription }) => {
-  const trimmedPhone = (phone || '').trim();
+const upsertPushSubscription = async ({ phone, whatsappOptIn = true }) => {
+  const normalizedPhone = normalizeToE164(phone);
+  const trimmedPhone = (normalizedPhone || phone || '').trim();
   const digits = sanitizeDigits(trimmedPhone);
-  if ((!trimmedPhone && !digits) || !subscription) {
+  if (!trimmedPhone || !digits) {
     return null;
   }
 
-  const storedPhone = trimmedPhone || digits;
-  const serializedSubscription = JSON.stringify(subscription);
+  const metadata = {
+    whatsappOptIn: Boolean(whatsappOptIn),
+    normalizedPhone: trimmedPhone.startsWith('+') ? trimmedPhone : `+${digits}`,
+    updatedAt: new Date().toISOString(),
+  };
+
   const { rows } = await pool.query(
     `INSERT INTO push_subscriptions (id, phone, sanitized_phone, subscription_json)
      VALUES ($1, $2, $3, $4)
@@ -305,7 +314,7 @@ const upsertPushSubscription = async ({ phone, subscription }) => {
        subscription_json = EXCLUDED.subscription_json,
        updated_at = NOW()
      RETURNING *;`,
-    [crypto.randomUUID(), storedPhone, digits || null, serializedSubscription]
+    [crypto.randomUUID(), metadata.normalizedPhone, digits || null, JSON.stringify(metadata)]
   );
 
   return mapPushSubscription(rows[0]);
@@ -313,7 +322,8 @@ const upsertPushSubscription = async ({ phone, subscription }) => {
 
 const getPushSubscriptionByPhone = async (phone) => {
   const trimmedPhone = (phone || '').trim();
-  const digits = sanitizeDigits(trimmedPhone);
+  const normalizedPhone = normalizeToE164(trimmedPhone) || trimmedPhone;
+  const digits = sanitizeDigits(normalizedPhone || trimmedPhone);
   if (!trimmedPhone && !digits) {
     return null;
   }
@@ -323,7 +333,7 @@ const getPushSubscriptionByPhone = async (phone) => {
      WHERE phone = $1 OR sanitized_phone = $2
      ORDER BY updated_at DESC
      LIMIT 1;`,
-    [trimmedPhone || null, digits || null]
+    [normalizedPhone || trimmedPhone || null, digits || null]
   );
 
   return mapPushSubscription(rows[0]);
@@ -331,13 +341,14 @@ const getPushSubscriptionByPhone = async (phone) => {
 
 const deletePushSubscriptionByPhone = async (phone) => {
   const trimmedPhone = (phone || '').trim();
-  const digits = sanitizeDigits(trimmedPhone);
+  const normalizedPhone = normalizeToE164(trimmedPhone) || trimmedPhone;
+  const digits = sanitizeDigits(normalizedPhone || trimmedPhone);
   if (!trimmedPhone && !digits) {
     return false;
   }
   const result = await pool.query(
     'DELETE FROM push_subscriptions WHERE phone = $1 OR sanitized_phone = $2;',
-    [trimmedPhone || null, digits || null]
+    [normalizedPhone || trimmedPhone || null, digits || null]
   );
   return result.rowCount > 0;
 };

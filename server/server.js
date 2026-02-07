@@ -2,7 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
 const path = require('path');
-const webpush = require('web-push');
+const { sendWhatsAppMessage, normalizeToE164, isWhatsAppConfigured } = require('./services/whatsapp.service');
 const db = require('./db');
 const {
   createPlan,
@@ -13,7 +13,6 @@ const {
   deletePlan,
   upsertPushSubscription,
   getPushSubscriptionByPhone,
-  deletePushSubscriptionByPhone,
   getPlanById,
   replacePlanClases,
   resetPlanClases,
@@ -53,9 +52,6 @@ const sanitizeOriginString = (value) => {
   return lower;
 };
 
-const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY;
-const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
-const VAPID_CONTACT_EMAIL = process.env.VAPID_CONTACT_EMAIL;
 const FRONTEND_BASE_URL = normalizeHttpsUrl(process.env.FRONTEND_BASE_URL);
 const RAW_ALLOWED_ORIGINS = process.env.APP_ALLOWED_ORIGINS || '';
 const RENDER_PRODUCTION_ORIGIN = 'https://agenda-virtual-backend-di4k.onrender.com';
@@ -73,7 +69,7 @@ const ensureAllowedOrigin = (candidate) => {
 
 ensureAllowedOrigin(FRONTEND_BASE_URL);
 ensureAllowedOrigin(RENDER_PRODUCTION_ORIGIN);
-const hasVapidConfig = Boolean(VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY && VAPID_CONTACT_EMAIL);
+const hasWhatsAppConfig = Boolean(isWhatsAppConfigured);
 const DEFAULT_ACTION_URL = '/firmar-clase';
 
 const buildFrontendUrl = (path = '/', queryParams = {}) => {
@@ -105,10 +101,8 @@ const buildFrontendSignatureUrl = (pendingId, planId, claseIndex) =>
     classIndex: typeof claseIndex === 'number' ? claseIndex : undefined,
   });
 
-if (hasVapidConfig) {
-  webpush.setVapidDetails(VAPID_CONTACT_EMAIL, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
-} else {
-  console.warn('VAPID keys no configuradas. Las notificaciones push continuarán deshabilitadas.');
+if (!hasWhatsAppConfig) {
+  console.warn('El servicio de WhatsApp (Twilio) no está completamente configurado.');
 }
 
 const app = express();
@@ -199,22 +193,6 @@ const deleteClassSignatureRecordsByPlan = (planId) => {
 };
 
 const sanitizeDigits = (value = '') => value.replace(/[^0-9]/g, '');
-const isValidPushSubscription = (candidate) => {
-  if (!candidate || typeof candidate !== 'object') {
-    return false;
-  }
-  if (typeof candidate.endpoint !== 'string' || !candidate.endpoint.trim()) {
-    return false;
-  }
-  if (candidate.keys && typeof candidate.keys === 'object') {
-    const { p256dh, auth } = candidate.keys;
-    if (typeof p256dh !== 'string' || typeof auth !== 'string') {
-      return false;
-    }
-  }
-  return true;
-};
-
 const mutatePlanClase = async (planId, claseIndex, mutator) => {
   const plan = await getPlanById(planId);
   if (!plan || !Array.isArray(plan.clases)) {
@@ -256,62 +234,49 @@ const resolveActionUrl = (explicitUrl) => {
   return buildFrontendUrl(DEFAULT_ACTION_URL);
 };
 
-const buildPushNotificationPayload = ({ title, body, data = {}, tag, icon, badge } = {}) => {
-  const payloadData = typeof data === 'object' && data !== null ? { ...data } : {};
-  payloadData.url = resolveActionUrl(payloadData.url);
+const composeWhatsAppNotificationMessage = ({ title, body, data = {} } = {}) => {
+  const sections = [];
+  if (title) {
+    sections.push(title.trim());
+  }
+  if (body) {
+    sections.push(body.trim());
+  }
 
-  return {
-    title: title || 'Agenda Pro',
-    body: body || 'Tienes una solicitud pendiente por confirmar.',
-    tag: tag || 'agenda-pro-plan',
-    icon,
-    badge,
-    data: payloadData,
-    requireInteraction: true,
-    actions: [
-      { action: 'accept-plan', title: 'Aceptar plan' },
-      { action: 'reject-plan', title: 'Rechazar plan' },
-    ],
-  };
+  const resolvedUrl = resolveActionUrl(data.url || data.link || data.targetUrl);
+  if (resolvedUrl) {
+    sections.push(`🔗 Revisa aquí: ${resolvedUrl}`);
+  }
+
+  return sections.filter(Boolean).join('\n');
 };
 
-const buildClassSignatureNotification = ({ plan, claseIndex, pendingId }) => {
+const buildClassSignatureMessage = ({ plan, claseIndex, pendingId }) => {
   const clase = plan?.clases?.[claseIndex];
   const claseNumero = clase?.numero ?? claseIndex + 1;
   const totalClases = Array.isArray(plan?.clases) ? plan.clases.length : Number(plan?.tipoPlan) || 0;
   const isLastClass = totalClases > 0 && claseNumero === totalClases;
   const planUrl = buildFrontendSignatureUrl(pendingId, plan?.id, claseIndex);
-  const bodyBase = `${plan?.nombre || 'El estudiante'} está por iniciar su clase. Confirma para firmarla.`;
-  const body = isLastClass
-    ? `${bodyBase} RECUERDA! ESTA ES LA ULTIMA CLASE DE TU PLAN`
-    : bodyBase;
-  return buildPushNotificationPayload({
-    title: `Confirma la clase #${claseNumero}`,
-    body,
-    tag: `class-signature-${plan?.id || 'plan'}-${claseNumero}`,
-    data: {
-      type: 'class-signature',
-      planId: plan?.id,
-      claseIndex,
-      claseNumero,
-      alumno: plan?.nombre,
-      telefono: plan?.telefono,
-      pendingId,
-      url: planUrl,
-    },
-    actions: [
-      { action: 'accept-class', title: 'Aceptar clase' },
-      { action: 'reject-class', title: 'Rechazar clase' },
-    ],
-  });
+  const reminder = isLastClass ? '\nRECUERDA: Esta es la última clase del plan.' : '';
+  return [
+    'Tienes una nueva clase pendiente por firmar 📘',
+    `Alumno: ${plan?.nombre || 'Estudiante'}`,
+    `Clase #${claseNumero}`,
+    reminder.trim(),
+    `Confirma aquí: ${planUrl}`,
+  ]
+    .filter(Boolean)
+    .join('\n');
 };
 
-const sendClassSignatureNotification = async ({ subscriptionRecord, plan, claseIndex, pendingId }) => {
-  if (!subscriptionRecord || !subscriptionRecord.subscription) {
-    throw new Error('No existe una suscripción push para este acudiente.');
+const sendClassSignatureWhatsApp = async ({ contactRecord, plan, claseIndex, pendingId }) => {
+  if (!contactRecord || !contactRecord.whatsappOptIn) {
+    throw new Error('No existe un contacto de WhatsApp activo para este tutor.');
   }
-  const payload = buildClassSignatureNotification({ plan, claseIndex, pendingId });
-  await webpush.sendNotification(subscriptionRecord.subscription, JSON.stringify(payload));
+
+  const destination = contactRecord.normalizedPhone || contactRecord.phone || plan?.telefono;
+  const message = buildClassSignatureMessage({ plan, claseIndex, pendingId });
+  await sendWhatsAppMessage({ to: destination, message });
 };
 
 app.get('/health', (_req, res) => {
@@ -331,79 +296,73 @@ app.get('/firmar-clase', (_req, res) => {
 });
 
 const handlePushPublicKey = (_req, res) => {
-  if (!VAPID_PUBLIC_KEY) {
-    return res.status(503).json({ error: 'Las notificaciones push no están configuradas.' });
-  }
-  res.json({ publicKey: VAPID_PUBLIC_KEY });
+  res.json({ message: 'Las notificaciones ahora se envían vía WhatsApp.' });
 };
 
 const handlePushSubscription = async (req, res) => {
-  if (!hasVapidConfig) {
-    return res.status(503).json({ error: 'Las notificaciones push no están disponibles.' });
+  if (!hasWhatsAppConfig) {
+    return res.status(503).json({ error: 'El servicio de WhatsApp no está disponible.' });
   }
 
-  const { phone, subscription } = req.body || {};
+  const { phone, whatsappOptIn = true } = req.body || {};
+  const normalized = normalizeToE164(phone);
   const digits = sanitizeDigits(phone);
-  if (!digits) {
+  if (!normalized || !digits) {
     return res.status(400).json({ error: 'Debes enviar un número de teléfono válido.' });
   }
 
-  if (!isValidPushSubscription(subscription)) {
-    return res.status(400).json({ error: 'La suscripción enviada no es válida.' });
-  }
-
   try {
-    const existing = await getPushSubscriptionByPhone(digits);
-    const stored = await upsertPushSubscription({ phone: digits, subscription });
+    const existing = await getPushSubscriptionByPhone(normalized);
+    const stored = await upsertPushSubscription({ phone: normalized, whatsappOptIn });
     if (!stored) {
-      return res.status(500).json({ error: 'No se pudo guardar la suscripción.' });
+      return res.status(500).json({ error: 'No se pudo guardar el contacto de WhatsApp.' });
     }
     const statusCode = existing ? 200 : 201;
     const message = existing
-      ? 'Suscripción actualizada correctamente.'
-      : 'Suscripción registrada correctamente.';
+      ? 'Contacto de WhatsApp actualizado correctamente.'
+      : 'Contacto de WhatsApp registrado correctamente.';
     res.status(statusCode).json({ message, data: { phone: stored.phone } });
   } catch (error) {
-    console.error('Error guardando la suscripción push', error);
-    res.status(500).json({ error: 'No se pudo guardar la suscripción push.' });
+    console.error('Error guardando el contacto de WhatsApp', error);
+    res.status(500).json({ error: 'No se pudo guardar el contacto de WhatsApp.' });
   }
 };
 
 const handlePushSend = async (req, res) => {
-  if (!hasVapidConfig) {
-    return res.status(503).json({ error: 'Las notificaciones push no están disponibles.' });
+  if (!hasWhatsAppConfig) {
+    return res.status(503).json({ error: 'El servicio de WhatsApp no está disponible.' });
   }
 
   const { phone, notification = {} } = req.body || {};
-  const digits = sanitizeDigits(phone);
-  if (!digits) {
+  const normalized = normalizeToE164(phone);
+  if (!normalized) {
     return res.status(400).json({ error: 'Debes enviar un número de teléfono válido.' });
   }
 
-  const subscriptionRecord = await getPushSubscriptionByPhone(digits);
-  if (!subscriptionRecord || !subscriptionRecord.subscription) {
-    return res.status(404).json({ error: 'No existe una suscripción push activa para este número.' });
+  const contactRecord = await getPushSubscriptionByPhone(normalized);
+  if (!contactRecord || !contactRecord.whatsappOptIn) {
+    return res.status(404).json({ error: 'No existe un contacto de WhatsApp activo para este número.' });
   }
 
-  const payload = buildPushNotificationPayload({
+  const message = composeWhatsAppNotificationMessage({
     ...notification,
     data: {
-      phone: digits,
+      phone: normalized,
       pendingId: notification.pendingId || notification.data?.pendingId,
       ...notification.data,
     },
   });
 
+  if (!message.trim()) {
+    return res.status(400).json({ error: 'El mensaje de WhatsApp está vacío.' });
+  }
+
   try {
-    await webpush.sendNotification(subscriptionRecord.subscription, JSON.stringify(payload));
-    res.json({ message: 'Notificación enviada correctamente.' });
+    await sendWhatsAppMessage({ to: contactRecord.normalizedPhone || normalized, message });
+    res.json({ message: 'Notificación enviada correctamente por WhatsApp.' });
   } catch (error) {
-    console.error('Error enviando la notificación push', error);
-    if (error.statusCode === 404 || error.statusCode === 410) {
-      await deletePushSubscriptionByPhone(digits);
-      return res.status(410).json({ error: 'La suscripción ya no es válida y fue eliminada.' });
-    }
-    res.status(502).json({ error: 'No se pudo enviar la notificación push.' });
+    console.error('Error enviando la notificación de WhatsApp', error);
+    res.status(502).json({ error: 'No se pudo enviar la notificación de WhatsApp.' });
   }
 };
 
@@ -570,8 +529,8 @@ app.patch('/api/planes/:id/clases/:index', async (req, res) => {
 });
 
 app.post('/api/planes/:planId/clases/:index/firma/request', async (req, res) => {
-  if (!hasVapidConfig) {
-    return res.status(503).json({ error: 'Las notificaciones push no están disponibles.' });
+  if (!hasWhatsAppConfig) {
+    return res.status(503).json({ error: 'Las notificaciones de WhatsApp no están disponibles.' });
   }
 
   const { planId, index } = req.params;
@@ -604,8 +563,8 @@ app.post('/api/planes/:planId/clases/:index/firma/request', async (req, res) => 
   }
 
   const subscriptionRecord = await getPushSubscriptionByPhone(digits);
-  if (!subscriptionRecord || !subscriptionRecord.subscription) {
-    return res.status(404).json({ error: 'No existe una suscripción push activa para este tutor.' });
+  if (!subscriptionRecord || !subscriptionRecord.whatsappOptIn) {
+    return res.status(404).json({ error: 'El tutor aún no ha registrado un número de WhatsApp válido.' });
   }
 
   const pendingRecord = saveClassSignatureRecord({ planId, claseIndex, phone: digits });
@@ -622,8 +581,8 @@ app.post('/api/planes/:planId/clases/:index/firma/request', async (req, res) => 
   }
 
   try {
-    await sendClassSignatureNotification({
-      subscriptionRecord,
+    await sendClassSignatureWhatsApp({
+      contactRecord: subscriptionRecord,
       plan: mutation.plan,
       claseIndex,
       pendingId: pendingRecord.id,
@@ -639,10 +598,6 @@ app.post('/api/planes/:planId/clases/:index/firma/request', async (req, res) => 
       }
       return claseRef;
     });
-    if (error.statusCode === 404 || error.statusCode === 410) {
-      await deletePushSubscriptionByPhone(digits);
-      return res.status(410).json({ error: 'La suscripción ya no es válida y fue eliminada.' });
-    }
     return res.status(502).json({ error: 'No se pudo enviar la notificación al tutor.' });
   }
 });
