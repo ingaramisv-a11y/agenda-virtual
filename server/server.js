@@ -7,6 +7,7 @@ const db = require('./db');
 const {
   createPlan,
   searchPlan,
+  searchPlans,
   listPlans,
   toggleClase,
   deletePlan,
@@ -519,11 +520,11 @@ app.get('/api/planes', async (req, res) => {
   }
 
   try {
-    const plan = await searchPlan(termino);
-    if (!plan) {
+    const planes = await searchPlans(termino);
+    if (!planes.length) {
       return res.status(404).json({ error: 'No se encontró un plan con los datos proporcionados.' });
     }
-    res.json({ data: plan });
+    res.json({ data: planes });
   } catch (error) {
     console.error('Error al buscar plan', error);
     res.status(500).json({ error: 'No se pudo realizar la búsqueda.' });

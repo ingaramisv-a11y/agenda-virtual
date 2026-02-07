@@ -189,10 +189,10 @@ const createPlan = async (payload) => {
   return getPlanById(planId);
 };
 
-const searchPlan = async (term) => {
+const searchPlans = async (term) => {
   const cleanedTerm = term?.trim().toLowerCase() ?? '';
   if (!cleanedTerm) {
-    return null;
+    return [];
   }
 
   const digits = sanitizeDigits(term);
@@ -203,11 +203,16 @@ const searchPlan = async (term) => {
         OR telefono LIKE $2
         OR sanitized_telefono LIKE $2
      ORDER BY created_at DESC
-     LIMIT 1;`,
+     LIMIT 25;`,
     [`%${cleanedTerm}%`, likeDigits]
   );
 
-  return mapRow(rows[0]);
+  return rows.map(mapRow).filter(Boolean);
+};
+
+const searchPlan = async (term) => {
+  const results = await searchPlans(term);
+  return results[0] || null;
 };
 
 const listPlans = async () => {
@@ -341,6 +346,7 @@ module.exports = {
   ready,
   createPlan,
   searchPlan,
+  searchPlans,
   listPlans,
   toggleClase,
   deletePlan,

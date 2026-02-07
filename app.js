@@ -1168,6 +1168,20 @@ document.addEventListener("DOMContentLoaded", () => {
     await sendClassSignatureRequest(planId, claseIndex);
   };
 
+  const handlePlanSelection = async (planId) => {
+    if (!planId) {
+      return;
+    }
+    try {
+      const response = await api.getPlanById(planId);
+      if (response?.data) {
+        renderResultado(response.data);
+      }
+    } catch (error) {
+      alert(error.message || "No se pudo cargar el plan seleccionado.");
+    }
+  };
+
   const renewPlan = async (planId) => {
     if (!planId || !api.renewPlan) {
       return;
@@ -1704,8 +1718,53 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   }
 
+  const renderPlanSelectionList = (planes = []) => {
+    if (!resultadoContenedor) return;
+    if (!planes.length) {
+      resetConsultaResultados();
+      return;
+    }
+
+    const items = planes
+      .map((plan) => {
+        const diasLabel = formatDaysLabel(plan.dias);
+        const telefonoLabel = formatPhoneDisplay(plan.telefono);
+        return `
+        <li>
+          <button type="button" class="plan-selection-btn" data-plan-id="${plan.id}">
+            <span class="plan-selection-name">${plan.nombre}</span>
+            <span class="plan-selection-meta">${telefonoLabel} · ${diasLabel}</span>
+          </button>
+        </li>`;
+      })
+      .join("");
+
+    resultadoContenedor.innerHTML = `
+      <div class="resultado-header">
+        <div class="resultado-summary">
+          <h3>Selecciona un alumno</h3>
+          <span>${planes.length} resultados coinciden con tu búsqueda.</span>
+        </div>
+      </div>
+      <ul class="plan-selection-list">
+        ${items}
+      </ul>
+    `;
+
+    setPlanDetalleActual(null);
+  };
+
   const renderResultado = (plan) => {
     if (!resultadoContenedor) return;
+    if (Array.isArray(plan)) {
+      if (plan.length === 1) {
+        renderResultado(plan[0]);
+      } else {
+        renderPlanSelectionList(plan);
+      }
+      return;
+    }
+
     if (!plan) {
       resetConsultaResultados({
         message: "No se encontró un plan con los datos ingresados. Verifica el nombre o número.",
@@ -2071,7 +2130,14 @@ document.addEventListener("DOMContentLoaded", () => {
 
       try {
         const response = await api.searchPlan(terminoNumerico || termino);
-        renderResultado(response.data);
+        const data = response?.data;
+        if (Array.isArray(data)) {
+          renderResultado(data);
+        } else if (data) {
+          renderResultado(data);
+        } else {
+          renderResultado(null);
+        }
       } catch (error) {
         renderResultado(null);
         if (error.status !== 404) {
@@ -2097,6 +2163,14 @@ document.addEventListener("DOMContentLoaded", () => {
     resultadoContenedor.addEventListener("click", (event) => {
       if (!isAuthenticated) {
         setAuthStatusMessage("Inicia sesión para administrar las clases registradas.");
+        return;
+      }
+      const selectionButton = event.target.closest(".plan-selection-btn");
+      if (selectionButton) {
+        const { planId: selectedPlanId } = selectionButton.dataset;
+        if (selectedPlanId) {
+          handlePlanSelection(selectedPlanId);
+        }
         return;
       }
       const deleteButton = event.target.closest(".delete-plan-btn");
