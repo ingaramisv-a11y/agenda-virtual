@@ -234,49 +234,96 @@ const resolveActionUrl = (explicitUrl) => {
   return buildFrontendUrl(DEFAULT_ACTION_URL);
 };
 
-const composeWhatsAppNotificationMessage = ({ title, body, data = {} } = {}) => {
-  const sections = [];
-  if (title) {
-    sections.push(title.trim());
-  }
-  if (body) {
-    sections.push(body.trim());
-  }
+const DEFAULT_TUTOR_NAME = process.env.DEFAULT_TUTOR_NAME || 'Profe Diana';
 
-  const resolvedUrl = resolveActionUrl(data.url || data.link || data.targetUrl);
-  if (resolvedUrl) {
-    sections.push(`🔗 Revisa aquí: ${resolvedUrl}`);
+const formatDaysLabel = (dias = []) => {
+  if (!Array.isArray(dias) || !dias.length) {
+    return 'Horario por confirmar';
   }
-
-  return sections.filter(Boolean).join('\n');
-};
-
-const buildClassSignatureMessage = ({ plan, claseIndex, pendingId }) => {
-  const clase = plan?.clases?.[claseIndex];
-  const claseNumero = clase?.numero ?? claseIndex + 1;
-  const totalClases = Array.isArray(plan?.clases) ? plan.clases.length : Number(plan?.tipoPlan) || 0;
-  const isLastClass = totalClases > 0 && claseNumero === totalClases;
-  const planUrl = buildFrontendSignatureUrl(pendingId, plan?.id, claseIndex);
-  const reminder = isLastClass ? '\nRECUERDA: Esta es la última clase del plan.' : '';
-  return [
-    'Tienes una nueva clase pendiente por firmar 📘',
-    `Alumno: ${plan?.nombre || 'Estudiante'}`,
-    `Clase #${claseNumero}`,
-    reminder.trim(),
-    `Confirma aquí: ${planUrl}`,
-  ]
+  return dias
+    .map((dia) => {
+      if (!dia) {
+        return '';
+      }
+      const normalized = `${dia}`.trim();
+      if (!normalized) {
+        return '';
+      }
+      return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+    })
     .filter(Boolean)
-    .join('\n');
+    .join(' · ');
 };
 
-const sendClassSignatureWhatsApp = async ({ contactRecord, plan, claseIndex, pendingId }) => {
+const formatScheduleSummary = (planLike = {}) => {
+  const daysLabel = formatDaysLabel(planLike.dias);
+  if (planLike.hora) {
+    return `${daysLabel} · ${planLike.hora}`;
+  }
+  return daysLabel;
+};
+
+const buildPlanConfirmationUrl = (pendingId, candidateUrl) => {
+  const explicit = resolveActionUrl(candidateUrl);
+  if (explicit) {
+    return explicit;
+  }
+  if (!pendingId) {
+    return null;
+  }
+  return buildFrontendUrl('/', { pending: pendingId });
+};
+
+const sendPlanApprovalTemplate = async ({ contactRecord, planPayload, confirmationUrl }) => {
   if (!contactRecord || !contactRecord.whatsappOptIn) {
     throw new Error('No existe un contacto de WhatsApp activo para este tutor.');
   }
+  if (!planPayload) {
+    throw new Error('No se encontró la información del plan para preparar la notificación.');
+  }
 
-  const destination = contactRecord.normalizedPhone || contactRecord.phone || plan?.telefono;
-  const message = buildClassSignatureMessage({ plan, claseIndex, pendingId });
-  await sendWhatsAppMessage({ to: destination, message });
+  const destination = contactRecord.normalizedPhone || contactRecord.phone;
+  const planTypeLabel = planPayload.tipoPlan ? `${planPayload.tipoPlan} clases` : 'Plan personalizado';
+  const variables = [
+    planPayload.acudiente || 'Acudiente',
+    planPayload.nombre || 'Alumno',
+    DEFAULT_TUTOR_NAME,
+    planTypeLabel,
+    formatScheduleSummary(planPayload),
+    confirmationUrl || buildFrontendUrl('/'),
+  ];
+
+  // Template "plan_approval" recoge los detalles del plan y el enlace de confirmación.
+  await sendWhatsAppMessage(destination, 'plan_approval', variables);
+};
+
+const buildClassTimingLabel = (plan, claseIndex) => {
+  const clase = plan?.clases?.[claseIndex];
+  const claseNumero = clase?.numero ?? claseIndex + 1;
+  const schedule = formatScheduleSummary(plan);
+  return `Clase #${claseNumero} · ${schedule}`;
+};
+
+const sendClassSignatureTemplate = async ({ contactRecord, plan, claseIndex, pendingId }) => {
+  if (!contactRecord || !contactRecord.whatsappOptIn) {
+    throw new Error('No existe un contacto de WhatsApp activo para este tutor.');
+  }
+  if (!plan) {
+    throw new Error('No se encontró la información del plan para solicitar la firma.');
+  }
+
+  const destination = contactRecord.normalizedPhone || contactRecord.phone || plan.telefono;
+  const signatureLink = buildFrontendSignatureUrl(pendingId, plan.id, claseIndex);
+  const variables = [
+    plan.acudiente || 'Acudiente',
+    plan.nombre || 'Alumno',
+    DEFAULT_TUTOR_NAME,
+    buildClassTimingLabel(plan, claseIndex),
+    signatureLink,
+  ];
+
+  // Template "class_signature_request" se envía antes de iniciar la clase para capturar la firma.
+  await sendWhatsAppMessage(destination, 'class_signature_request', variables);
 };
 
 app.get('/health', (_req, res) => {
@@ -343,25 +390,28 @@ const handlePushSend = async (req, res) => {
   if (!contactRecord || !contactRecord.whatsappOptIn) {
     return res.status(404).json({ error: 'No existe un contacto de WhatsApp activo para este número.' });
   }
-
-  const message = composeWhatsAppNotificationMessage({
-    ...notification,
-    data: {
-      phone: normalized,
-      pendingId: notification.pendingId || notification.data?.pendingId,
-      ...notification.data,
-    },
-  });
-
-  if (!message.trim()) {
-    return res.status(400).json({ error: 'El mensaje de WhatsApp está vacío.' });
+  const notificationData = notification.data || {};
+  const pendingId = notification.pendingId || notificationData.pendingId;
+  if (!pendingId) {
+    return res.status(400).json({ error: 'Falta el identificador del plan pendiente.' });
   }
 
+  const pendingRecord = getPendingPlanRecord(pendingId);
+  if (!pendingRecord) {
+    return res.status(404).json({ error: 'No existe una solicitud pendiente con el identificador proporcionado.' });
+  }
+
+  const confirmationUrl = buildPlanConfirmationUrl(pendingId, notificationData.url || notificationData.link);
+
   try {
-    await sendWhatsAppMessage({ to: contactRecord.normalizedPhone || normalized, message });
-    res.json({ message: 'Notificación enviada correctamente por WhatsApp.' });
+    await sendPlanApprovalTemplate({
+      contactRecord,
+      planPayload: pendingRecord.payload,
+      confirmationUrl,
+    });
+    res.json({ message: 'Notificación de aprobación enviada correctamente por WhatsApp.' });
   } catch (error) {
-    console.error('Error enviando la notificación de WhatsApp', error);
+    console.error('Error enviando la notificación de aprobación de plan', error);
     res.status(502).json({ error: 'No se pudo enviar la notificación de WhatsApp.' });
   }
 };
@@ -581,7 +631,7 @@ app.post('/api/planes/:planId/clases/:index/firma/request', async (req, res) => 
   }
 
   try {
-    await sendClassSignatureWhatsApp({
+    await sendClassSignatureTemplate({
       contactRecord: subscriptionRecord,
       plan: mutation.plan,
       claseIndex,

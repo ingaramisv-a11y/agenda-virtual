@@ -53,12 +53,44 @@ const ensureWhatsAppPrefix = (value) => {
   return `whatsapp:${value}`;
 };
 
-const sendWhatsAppMessage = async ({ to, message }) => {
+const templateSidCache = new Map();
+
+const resolveTemplateSid = async (templateName) => {
+  if (!templateName) {
+    throw new Error('Debes especificar la plantilla de WhatsApp a enviar.');
+  }
+  if (templateSidCache.has(templateName)) {
+    return templateSidCache.get(templateName);
+  }
+  if (!twilioClient?.content) {
+    throw new Error('El cliente de Twilio no permite consultar plantillas de contenido.');
+  }
+
+  const templates = await twilioClient.content.v1.templates.list({ limit: 100 });
+  const match = templates.find((template) => {
+    const friendlyName = template?.friendlyName?.trim();
+    const uniqueName = template?.uniqueName?.trim();
+    return friendlyName === templateName || uniqueName === templateName;
+  });
+
+  if (!match) {
+    throw new Error(`No se encontró la plantilla de WhatsApp "${templateName}" en Twilio.`);
+  }
+
+  templateSidCache.set(templateName, match.sid);
+  return match.sid;
+};
+
+const buildContentVariablesPayload = (variables = []) => {
+  return variables.reduce((acc, value, index) => {
+    acc[String(index + 1)] = value ?? '';
+    return acc;
+  }, {});
+};
+
+const sendWhatsAppMessage = async (to, templateName, variables = []) => {
   if (!isConfigured) {
     throw new Error('El servicio de WhatsApp (Twilio) no está configurado.');
-  }
-  if (!message || !message.trim()) {
-    throw new Error('El mensaje de WhatsApp no puede estar vacío.');
   }
 
   const normalized = normalizeToE164(to);
@@ -66,15 +98,17 @@ const sendWhatsAppMessage = async ({ to, message }) => {
     throw new Error('No se pudo normalizar el número de WhatsApp proporcionado.');
   }
 
+  const contentSid = await resolveTemplateSid(templateName);
   const toWhatsApp = ensureWhatsAppPrefix(normalized);
   const from = configuredFromNumber.startsWith('whatsapp:')
     ? configuredFromNumber
     : ensureWhatsAppPrefix(configuredFromNumber);
 
   await twilioClient.messages.create({
-    body: message.trim(),
     from,
     to: toWhatsApp,
+    contentSid,
+    contentVariables: JSON.stringify(buildContentVariablesPayload(variables)),
   });
 };
 
