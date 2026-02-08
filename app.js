@@ -29,6 +29,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const weekLabel = document.getElementById("week-label");
   const weekRange = document.getElementById("week-range");
   const weekGrid = document.getElementById("week-grid");
+  const tutorPhoneInput = document.getElementById("telefonoAcudiente");
   const navButtons = document.querySelectorAll(".panel-action");
   const viewToNavButton = {
     plan: openFormButton,
@@ -85,6 +86,7 @@ document.addEventListener("DOMContentLoaded", () => {
   let isAuthenticated = false;
   let phoneRegistrationInFlight = false;
   let phoneRegistrationElements = null;
+  let ensureTutorPhonePrefix = () => {};
   let classConfirmResolver = null;
   let activeSession = null;
   let activeView = null;
@@ -1246,6 +1248,25 @@ document.addEventListener("DOMContentLoaded", () => {
     return isValidE164(candidate) ? candidate : null;
   };
 
+  const applyDefaultCountryPrefix = (input) => {
+    if (!input) {
+      return () => {};
+    }
+    const prefixValue = `${DEFAULT_WHATSAPP_COUNTRY_CODE} `;
+    const ensurePrefix = () => {
+      const current = (input.value || '').trim();
+      if (!current || current === '+' || current === DEFAULT_WHATSAPP_COUNTRY_CODE) {
+        input.value = prefixValue;
+      }
+    };
+    ensurePrefix();
+    input.addEventListener('focus', ensurePrefix);
+    input.addEventListener('blur', ensurePrefix);
+    return ensurePrefix;
+  };
+
+  ensureTutorPhonePrefix = applyDefaultCountryPrefix(tutorPhoneInput);
+
   const ensurePhoneRegistrationElements = () => {
     if (phoneRegistrationElements) {
       return phoneRegistrationElements;
@@ -1294,9 +1315,11 @@ document.addEventListener("DOMContentLoaded", () => {
       authRegisterButton.insertAdjacentElement("beforebegin", form);
     }
 
+    const ensurePrefix = applyDefaultCountryPrefix(input);
+
     form.addEventListener("submit", handlePhoneRegistrationSubmit);
 
-    phoneRegistrationElements = { form, input, submitButton, feedback };
+    phoneRegistrationElements = { form, input, submitButton, feedback, ensurePrefix };
     return phoneRegistrationElements;
   };
 
@@ -1309,6 +1332,7 @@ document.addEventListener("DOMContentLoaded", () => {
     if (isVisible) {
       elements.form.removeAttribute("hidden");
       elements.form.setAttribute("aria-hidden", "false");
+      elements.ensurePrefix?.();
     } else if (!elements.form.hasAttribute("hidden")) {
       elements.form.setAttribute("hidden", "");
       elements.form.setAttribute("aria-hidden", "true");
@@ -1371,6 +1395,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
       setPhoneRegistrationMessage("Listo, guardamos tu WhatsApp para las notificaciones.", true);
       elements.form.reset();
+      elements.ensurePrefix?.();
     } catch (error) {
       console.error("Error registrando el WhatsApp para notificaciones", error);
       setPhoneRegistrationMessage(error.message || "No se pudo completar el registro.");
@@ -1984,6 +2009,7 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         planForm.reset();
+        ensureTutorPhonePrefix();
         dayCheckboxes.forEach((checkbox) => {
           checkbox.checked = false;
         });
