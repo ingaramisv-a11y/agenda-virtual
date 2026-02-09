@@ -246,6 +246,16 @@ body::before {
   margin: 0 auto 2.25rem;
   text-align: left;
   color: #f5fbff;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.dashboard-header-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
 }
 
 .dashboard-kicker {
@@ -269,6 +279,10 @@ body::before {
   color: rgba(245, 251, 255, 0.78);
   font-size: 1rem;
   line-height: 1.6;
+}
+
+.logout-button {
+  white-space: nowrap;
 }
 
 button:not(.clase-indicador),

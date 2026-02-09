@@ -5,8 +5,22 @@ const authToken = process.env.TWILIO_AUTH_TOKEN;
 const configuredFromNumber = process.env.TWILIO_WHATSAPP_NUMBER;
 const defaultCountryCode = (process.env.DEFAULT_WHATSAPP_COUNTRY_CODE || '57').replace(/[^0-9]/g, '');
 
-const isConfigured = Boolean(accountSid && authToken && configuredFromNumber);
-const twilioClient = isConfigured ? twilio(accountSid, authToken) : null;
+const missingCreds = !accountSid || !authToken;
+const isConfigured = Boolean(!missingCreds && configuredFromNumber);
+const twilioClient = !missingCreds ? twilio(accountSid, authToken) : null;
+
+const ensureTwilioClient = () => {
+  if (missingCreds) {
+    throw new Error('TWILIO_ACCOUNT_SID y TWILIO_AUTH_TOKEN son obligatorios para enviar mensajes de WhatsApp.');
+  }
+  if (!configuredFromNumber) {
+    throw new Error('TWILIO_WHATSAPP_NUMBER es obligatorio para enviar mensajes de WhatsApp.');
+  }
+  if (!twilioClient) {
+    throw new Error('No se pudo inicializar el cliente de Twilio.');
+  }
+  return twilioClient;
+};
 
 const normalizeToE164 = (value) => {
   if (!value) {
@@ -55,30 +69,37 @@ const ensureWhatsAppPrefix = (value) => {
 
 const templateSidCache = new Map();
 
-const resolveTemplateSid = async (templateName) => {
+const normalizeTemplateEnvKey = (templateName = '') => templateName
+  .toUpperCase()
+  .replace(/[^A-Z0-9]+/g, '_');
+
+const inferEnvKeyForTemplate = (templateName) => `TWILIO_TEMPLATE_${normalizeTemplateEnvKey(templateName)}_SID`;
+
+const looksLikeContentSid = (value = '') => /^HX[a-f0-9]{32}$/i.test(value);
+
+const resolveTemplateSid = (templateName) => {
   if (!templateName) {
     throw new Error('Debes especificar la plantilla de WhatsApp a enviar.');
   }
+
   if (templateSidCache.has(templateName)) {
     return templateSidCache.get(templateName);
   }
-  if (!twilioClient?.content) {
-    throw new Error('El cliente de Twilio no permite consultar plantillas de contenido.');
+
+  const directValue = templateName.trim();
+  if (looksLikeContentSid(directValue)) {
+    templateSidCache.set(templateName, directValue);
+    return directValue;
   }
 
-  const templates = await twilioClient.content.v1.templates.list({ limit: 100 });
-  const match = templates.find((template) => {
-    const friendlyName = template?.friendlyName?.trim();
-    const uniqueName = template?.uniqueName?.trim();
-    return friendlyName === templateName || uniqueName === templateName;
-  });
-
-  if (!match) {
-    throw new Error(`No se encontró la plantilla de WhatsApp "${templateName}" en Twilio.`);
+  const envKey = inferEnvKeyForTemplate(templateName);
+  const envValue = process.env[envKey]?.trim();
+  if (!envValue) {
+    throw new Error(`Configura la variable de entorno ${envKey} con el SID de la plantilla "${templateName}".`);
   }
 
-  templateSidCache.set(templateName, match.sid);
-  return match.sid;
+  templateSidCache.set(templateName, envValue);
+  return envValue;
 };
 
 const buildContentVariablesPayload = (variables = []) => {
@@ -89,22 +110,21 @@ const buildContentVariablesPayload = (variables = []) => {
 };
 
 const sendWhatsAppMessage = async (to, templateName, variables = []) => {
-  if (!isConfigured) {
-    throw new Error('El servicio de WhatsApp (Twilio) no está configurado.');
-  }
+  const client = ensureTwilioClient();
 
   const normalized = normalizeToE164(to);
   if (!normalized) {
     throw new Error('No se pudo normalizar el número de WhatsApp proporcionado.');
   }
 
-  const contentSid = await resolveTemplateSid(templateName);
+  const contentSid = resolveTemplateSid(templateName);
   const toWhatsApp = ensureWhatsAppPrefix(normalized);
   const from = configuredFromNumber.startsWith('whatsapp:')
     ? configuredFromNumber
     : ensureWhatsAppPrefix(configuredFromNumber);
 
-  await twilioClient.messages.create({
+  // WhatsApp delivery relies solely on messages.create; listing templates at runtime caused production errors.
+  await client.messages.create({
     from,
     to: toWhatsApp,
     contentSid,

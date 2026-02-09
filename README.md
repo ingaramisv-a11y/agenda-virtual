@@ -33,6 +33,7 @@ Agenda Pro is a single-page control center for **Profe Diana** to register swim 
 | `TWILIO_AUTH_TOKEN` | API token for the above account |
 | `TWILIO_WHATSAPP_NUMBER` | Sender number in `whatsapp:+123456789` format |
 | `DEFAULT_WHATSAPP_COUNTRY_CODE` | Optional fallback country code (defaults to `57`) |
+| `DEFAULT_TUTOR_NAME` | Optional tutor name used in WhatsApp templates (defaults to `Profe Diana`) |
 
 > The legacy VAPID keys are no longer used now that browser push has been removed.
 

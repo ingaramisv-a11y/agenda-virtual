@@ -30,6 +30,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const weekRange = document.getElementById("week-range");
   const weekGrid = document.getElementById("week-grid");
   const tutorPhoneInput = document.getElementById("telefonoAcudiente");
+  const logoutButton = document.getElementById("btn-logout");
   const navButtons = document.querySelectorAll(".panel-action");
   const viewToNavButton = {
     plan: openFormButton,
@@ -140,6 +141,10 @@ document.addEventListener("DOMContentLoaded", () => {
       clearInterval(watcher.intervalId);
       pendingClassWatchers.delete(key);
     }
+  };
+
+  const stopAllPendingClassWatchers = () => {
+    Array.from(pendingClassWatchers.keys()).forEach((key) => stopPendingClassWatcher(key));
   };
 
   const VALID_USER = "diana";
@@ -1450,17 +1455,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const unlockAppShell = ({ targetView = null } = {}) => {
     if (!isAuthenticated) {
       isAuthenticated = true;
-      if (authScreen) {
-        authScreen.style.display = "none";
-        authScreen.setAttribute("hidden", "");
-        authScreen.setAttribute("aria-hidden", "true");
-      }
-
-      if (appShell) {
-        appShell.style.display = "flex";
-        appShell.removeAttribute("hidden");
-        appShell.setAttribute("aria-hidden", "false");
-      }
+      hideAuthScreen();
+      showDashboardShell();
     }
 
     const viewToShow = typeof targetView === "string" ? targetView : null;
@@ -1499,6 +1495,54 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   };
 
+  const resetDashboardState = () => {
+    stopAllPendingClassWatchers();
+    planMostradoId = null;
+    planDetalleActual = null;
+    resetConsultaResultados({ clearInput: true });
+    scheduleState.planes = [];
+    scheduleState.lastFetchedAt = 0;
+    scheduleState.isLoading = false;
+    renderWeekCalendar([]);
+    setActiveNavButton(null);
+    setActiveView(null);
+    dismissPlanReview();
+    dismissClassSignatureReview();
+    setClassConfirmVisibility(false);
+  };
+
+  const hideAuthScreen = () => {
+    if (authScreen) {
+      authScreen.style.display = "none";
+      authScreen.setAttribute("hidden", "");
+      authScreen.setAttribute("aria-hidden", "true");
+    }
+  };
+
+  const showAuthScreen = () => {
+    if (authScreen) {
+      authScreen.style.display = "flex";
+      authScreen.removeAttribute("hidden");
+      authScreen.setAttribute("aria-hidden", "false");
+    }
+  };
+
+  const showDashboardShell = () => {
+    if (appShell) {
+      appShell.style.display = "flex";
+      appShell.removeAttribute("hidden");
+      appShell.setAttribute("aria-hidden", "false");
+    }
+  };
+
+  const hideDashboardShell = () => {
+    if (appShell) {
+      appShell.style.display = "none";
+      appShell.setAttribute("hidden", "");
+      appShell.setAttribute("aria-hidden", "true");
+    }
+  };
+
   const activateSession = (sessionDetails = {}, { silent = false } = {}) => {
     const normalizedEmail = (sessionDetails.email || ALLOWED_EMAIL).trim().toLowerCase();
     const session = {
@@ -1527,6 +1571,16 @@ document.addEventListener("DOMContentLoaded", () => {
       return true;
     }
     return false;
+  };
+
+  const handleLogout = () => {
+    persistSession(null);
+    activeSession = null;
+    isAuthenticated = false;
+    resetDashboardState();
+    hideDashboardShell();
+    showAuthScreen();
+    setAuthStatusMessage("Sesión cerrada. Ingresa tus credenciales para continuar.");
   };
 
   const handleSocialLogin = (providerKey = "google") => {
@@ -1585,6 +1639,10 @@ document.addEventListener("DOMContentLoaded", () => {
       handleSocialLogin(button.dataset.socialLogin || "google");
     });
   });
+
+  if (logoutButton) {
+    logoutButton.addEventListener("click", handleLogout);
+  }
 
   attemptSessionRestore();
 
