@@ -2,7 +2,12 @@ const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
 const path = require('path');
-const { sendWhatsAppMessage, normalizeToE164, isWhatsAppConfigured } = require('./services/whatsapp.service');
+const {
+  sendWhatsAppTemplate,
+  normalizeToE164,
+  isWhatsAppConfigured,
+  TEMPLATE_KEYS,
+} = require('./services/whatsapp.service');
 const db = require('./db');
 const {
   createPlan,
@@ -284,17 +289,26 @@ const sendPlanApprovalTemplate = async ({ contactRecord, planPayload, confirmati
 
   const destination = contactRecord.normalizedPhone || contactRecord.phone;
   const planTypeLabel = planPayload.tipoPlan ? `${planPayload.tipoPlan} clases` : 'Plan personalizado';
-  const variables = [
-    planPayload.acudiente || 'Acudiente',
-    planPayload.nombre || 'Alumno',
-    DEFAULT_TUTOR_NAME,
-    planTypeLabel,
-    formatScheduleSummary(planPayload),
-    confirmationUrl || buildFrontendUrl('/'),
-  ];
+  const confirmationTarget = confirmationUrl || buildFrontendUrl('/');
+  if (!confirmationTarget) {
+    throw new Error('No se pudo construir la URL de confirmación para el plan.');
+  }
 
-  // Template "plan_approval" recoge los detalles del plan y el enlace de confirmación.
-  await sendWhatsAppMessage(destination, 'plan_approval', variables);
+  const templateVariables = {
+    guardianName: planPayload.acudiente || 'Acudiente',
+    studentName: planPayload.nombre || 'Alumno',
+    tutorName: DEFAULT_TUTOR_NAME,
+    planLabel: planTypeLabel,
+    scheduleLabel: formatScheduleSummary(planPayload),
+    confirmationUrl: confirmationTarget,
+  };
+
+  // PLAN_APPROVAL usa el template aprobado en Twilio Content; los nombres deben coincidir con los slots definidos en whatsapp.service.js.
+  await sendWhatsAppTemplate({
+    to: destination,
+    templateKey: TEMPLATE_KEYS.PLAN_APPROVAL,
+    variables: templateVariables,
+  });
 };
 
 const buildClassTimingLabel = (plan, claseIndex) => {
@@ -314,16 +328,24 @@ const sendClassSignatureTemplate = async ({ contactRecord, plan, claseIndex, pen
 
   const destination = contactRecord.normalizedPhone || contactRecord.phone || plan.telefono;
   const signatureLink = buildFrontendSignatureUrl(pendingId, plan.id, claseIndex);
-  const variables = [
-    plan.acudiente || 'Acudiente',
-    plan.nombre || 'Alumno',
-    DEFAULT_TUTOR_NAME,
-    buildClassTimingLabel(plan, claseIndex),
-    signatureLink,
-  ];
+  if (!signatureLink) {
+    throw new Error('No se pudo construir el enlace de firma para la clase.');
+  }
 
-  // Template "class_signature_request" se envía antes de iniciar la clase para capturar la firma.
-  await sendWhatsAppMessage(destination, 'class_signature_request', variables);
+  const templateVariables = {
+    guardianName: plan.acudiente || 'Acudiente',
+    studentName: plan.nombre || 'Alumno',
+    tutorName: DEFAULT_TUTOR_NAME,
+    classLabel: buildClassTimingLabel(plan, claseIndex),
+    signatureUrl: signatureLink,
+  };
+
+  // CLASS_SIGNATURE mantiene paridad 1:1 con el template aprobado en Twilio para firmar clases.
+  await sendWhatsAppTemplate({
+    to: destination,
+    templateKey: TEMPLATE_KEYS.CLASS_SIGNATURE,
+    variables: templateVariables,
+  });
 };
 
 app.get('/health', (_req, res) => {
