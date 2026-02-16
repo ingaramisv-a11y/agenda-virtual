@@ -2,6 +2,13 @@ document.addEventListener("DOMContentLoaded", () => {
   const PHONE_DIGITS_MIN_LENGTH = 10;
   const DEFAULT_PUBLIC_BASE_URL = "https://agenda-virtual-backend-di4k.onrender.com";
   const DEFAULT_WHATSAPP_COUNTRY_CODE = "+57";
+  const WHATSAPP_OPT_IN_NUMBER = "15558548612";
+  const WHATSAPP_OPT_IN_MESSAGE = [
+    "Hola profe 😊",
+    "Estoy interesado(a) en recibir por WhatsApp las notificaciones de clases de natación, planes y aprobaciones.",
+    "Autorizo este número para recibir los mensajes.",
+    "¡Muchas gracias!",
+  ].join("\n");
 
   const authScreen = document.getElementById("auth-screen");
   const appShell = document.getElementById("app-shell");
@@ -85,8 +92,6 @@ document.addEventListener("DOMContentLoaded", () => {
   let planMostradoId = null;
   let planDetalleActual = null;
   let isAuthenticated = false;
-  let phoneRegistrationInFlight = false;
-  let phoneRegistrationElements = null;
   let ensureTutorPhonePrefix = () => {};
   let classConfirmResolver = null;
   let activeSession = null;
@@ -255,19 +260,26 @@ document.addEventListener("DOMContentLoaded", () => {
         method: "POST",
         headers: { "Content-Type": "application/json" },
       }),
-    // Legacy push endpoints now proxy WhatsApp sending; keep routes but rename helpers for clarity.
-    registerWhatsAppContact: (payload) =>
-      apiFetch(`${API_BASE_URL}/push/subscriptions`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      }),
+    // Legacy push endpoints now proxy WhatsApp sending; kept for backward compatibility on notifications.
     sendWhatsAppNotification: (payload) =>
       apiFetch(`${API_BASE_URL}/push/send`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       }),
+  };
+
+  const buildWhatsAppOptInUrl = () => {
+    const encodedMessage = encodeURIComponent(WHATSAPP_OPT_IN_MESSAGE);
+    return `https://wa.me/${WHATSAPP_OPT_IN_NUMBER}?text=${encodedMessage}`;
+  };
+
+  const openWhatsAppOptInWindow = () => {
+    const url = buildWhatsAppOptInUrl();
+    const newWindow = window.open(url, "_blank", "noopener,noreferrer");
+    if (!newWindow) {
+      window.location.href = url;
+    }
   };
 
   const getPendingIdFromQuery = () => {
@@ -1272,144 +1284,6 @@ document.addEventListener("DOMContentLoaded", () => {
 
   ensureTutorPhonePrefix = applyDefaultCountryPrefix(tutorPhoneInput);
 
-  const ensurePhoneRegistrationElements = () => {
-    if (phoneRegistrationElements) {
-      return phoneRegistrationElements;
-    }
-
-    if (!authRegisterButton) {
-      return null;
-    }
-
-    const form = document.createElement("form");
-    form.id = "phone-registration-form";
-    form.classList.add("phone-registration-form");
-    form.hidden = true;
-    form.setAttribute("aria-hidden", "true");
-    form.noValidate = true;
-
-    const label = document.createElement("label");
-    label.setAttribute("for", "phone-registration-input");
-    label.textContent = "Número de WhatsApp para alertas";
-
-    const input = document.createElement("input");
-    input.type = "tel";
-    input.id = "phone-registration-input";
-    input.placeholder = "+57 300 123 4567";
-    input.inputMode = "tel";
-    input.autocomplete = "tel";
-    input.required = true;
-
-    const submitButton = document.createElement("button");
-    submitButton.type = "submit";
-    submitButton.classList.add("secondary-action");
-    submitButton.textContent = "Confirmar número";
-
-    const feedback = document.createElement("p");
-    feedback.classList.add("auth-message", "phone-registration-message");
-    feedback.setAttribute("role", "status");
-    feedback.setAttribute("aria-live", "assertive");
-
-    form.append(label, input, submitButton, feedback);
-
-    if (authForm && authForm.parentElement) {
-      authForm.parentElement.insertBefore(form, authForm);
-    } else if (authRegisterButton.parentElement) {
-      authRegisterButton.parentElement.insertBefore(form, authRegisterButton);
-    } else {
-      authRegisterButton.insertAdjacentElement("beforebegin", form);
-    }
-
-    const ensurePrefix = applyDefaultCountryPrefix(input);
-
-    form.addEventListener("submit", handlePhoneRegistrationSubmit);
-
-    phoneRegistrationElements = { form, input, submitButton, feedback, ensurePrefix };
-    return phoneRegistrationElements;
-  };
-
-  const setPhoneRegistrationVisibility = (isVisible) => {
-    const elements = ensurePhoneRegistrationElements();
-    if (!elements) {
-      return;
-    }
-
-    if (isVisible) {
-      elements.form.removeAttribute("hidden");
-      elements.form.setAttribute("aria-hidden", "false");
-      elements.ensurePrefix?.();
-    } else if (!elements.form.hasAttribute("hidden")) {
-      elements.form.setAttribute("hidden", "");
-      elements.form.setAttribute("aria-hidden", "true");
-    }
-  };
-
-  const setPhoneRegistrationMessage = (message, isSuccess = false) => {
-    const elements = ensurePhoneRegistrationElements();
-    if (!elements) {
-      return;
-    }
-
-    elements.feedback.textContent = message || "";
-    elements.feedback.classList.toggle("success", Boolean(isSuccess));
-  };
-
-  const showPhoneRegistrationForm = () => {
-    const elements = ensurePhoneRegistrationElements();
-    if (!elements) {
-      return;
-    }
-
-    setPhoneRegistrationVisibility(true);
-    setPhoneRegistrationMessage("");
-  };
-
-  async function handlePhoneRegistrationSubmit(event) {
-    event.preventDefault();
-    if (phoneRegistrationInFlight) {
-      return;
-    }
-
-    const elements = ensurePhoneRegistrationElements();
-    if (!elements) {
-      return;
-    }
-
-    const normalizedPhone = normalizePhoneToWhatsApp(elements.input.value);
-    if (!normalizedPhone) {
-      setPhoneRegistrationMessage(
-        `Ingresa un número de WhatsApp válido en formato internacional (por ejemplo, ${DEFAULT_WHATSAPP_COUNTRY_CODE} 3001234567).`
-      );
-      return;
-    }
-
-    if (!api.registerWhatsAppContact) {
-      setPhoneRegistrationMessage("El backend no tiene habilitado el registro de WhatsApp.");
-      return;
-    }
-
-    phoneRegistrationInFlight = true;
-    elements.submitButton.disabled = true;
-    setPhoneRegistrationMessage("Registrando tu WhatsApp...");
-
-    try {
-      await api.registerWhatsAppContact({
-        phone: normalizedPhone,
-        whatsappOptIn: true,
-      });
-
-      setPhoneRegistrationMessage("Listo, guardamos tu WhatsApp para las notificaciones.", true);
-      elements.form.reset();
-      elements.ensurePrefix?.();
-    } catch (error) {
-      console.error("Error registrando el WhatsApp para notificaciones", error);
-      setPhoneRegistrationMessage(error.message || "No se pudo completar el registro.");
-    } finally {
-      phoneRegistrationInFlight = false;
-      elements.submitButton.disabled = false;
-    }
-  }
-
   const setActiveView = (targetView = null) => {
     const previousView = activeView;
     let resolvedView = null;
@@ -1630,7 +1504,7 @@ document.addEventListener("DOMContentLoaded", () => {
 
   if (authRegisterButton) {
     authRegisterButton.addEventListener("click", () => {
-      showPhoneRegistrationForm();
+      openWhatsAppOptInWindow();
     });
   }
 

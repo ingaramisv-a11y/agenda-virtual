@@ -112,6 +112,7 @@ if (!hasWhatsAppConfig) {
 
 const app = express();
 const FRONTEND_STATIC_DIR = path.resolve(__dirname, '..');
+const twilioWebhookParser = express.urlencoded({ extended: false });
 
 const isOriginAllowed = (origin) => {
   if (!ALLOWED_ORIGINS.length) {
@@ -198,6 +199,38 @@ const deleteClassSignatureRecordsByPlan = (planId) => {
 };
 
 const sanitizeDigits = (value = '') => value.replace(/[^0-9]/g, '');
+const escapeXml = (value = '') => `${value}`
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&apos;');
+
+const respondWithTwimlMessage = (res, statusCode, message = '') => {
+  const safeMessage = escapeXml(message || '');
+  const body = `<?xml version="1.0" encoding="UTF-8"?><Response>${safeMessage ? `<Message>${safeMessage}</Message>` : ''}</Response>`;
+  res.status(statusCode).type('text/xml').send(body);
+};
+
+const extractWhatsAppSenderFromPayload = (payload = {}) => {
+  const candidates = [payload.From, payload.from, payload.WaId, payload.waId, payload.Sender];
+  const rawCandidate = candidates.find((value) => typeof value === 'string' && value.trim().length);
+  if (!rawCandidate) {
+    return null;
+  }
+  const trimmed = rawCandidate.replace(/^whatsapp:/i, '').trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (trimmed.startsWith('+')) {
+    return normalizeToE164(trimmed);
+  }
+  const digits = sanitizeDigits(trimmed);
+  if (!digits) {
+    return null;
+  }
+  return normalizeToE164(`+${digits}`);
+};
 const mutatePlanClase = async (planId, claseIndex, mutator) => {
   const plan = await getPlanById(planId);
   if (!plan || !Array.isArray(plan.clases)) {
@@ -369,32 +402,9 @@ const handlePushPublicKey = (_req, res) => {
 };
 
 const handlePushSubscription = async (req, res) => {
-  if (!hasWhatsAppConfig) {
-    return res.status(503).json({ error: 'El servicio de WhatsApp no está disponible.' });
-  }
-
-  const { phone, whatsappOptIn = true } = req.body || {};
-  const normalized = normalizeToE164(phone);
-  const digits = sanitizeDigits(phone);
-  if (!normalized || !digits) {
-    return res.status(400).json({ error: 'Debes enviar un número de teléfono válido.' });
-  }
-
-  try {
-    const existing = await getPushSubscriptionByPhone(normalized);
-    const stored = await upsertPushSubscription({ phone: normalized, whatsappOptIn });
-    if (!stored) {
-      return res.status(500).json({ error: 'No se pudo guardar el contacto de WhatsApp.' });
-    }
-    const statusCode = existing ? 200 : 201;
-    const message = existing
-      ? 'Contacto de WhatsApp actualizado correctamente.'
-      : 'Contacto de WhatsApp registrado correctamente.';
-    res.status(statusCode).json({ message, data: { phone: stored.phone } });
-  } catch (error) {
-    console.error('Error guardando el contacto de WhatsApp', error);
-    res.status(500).json({ error: 'No se pudo guardar el contacto de WhatsApp.' });
-  }
+  return res.status(410).json({
+    error: 'Para registrarte debes enviarnos el mensaje de autorización desde WhatsApp usando el botón "Registrar mi WhatsApp".',
+  });
 };
 
 const handlePushSend = async (req, res) => {
@@ -438,6 +448,24 @@ const handlePushSend = async (req, res) => {
   }
 };
 
+const handleWhatsAppInbound = async (req, res) => {
+  const sender = extractWhatsAppSenderFromPayload(req.body || {});
+  if (!sender) {
+    console.warn('Webhook de WhatsApp recibido sin remitente identificable. Payload:', req.body);
+    respondWithTwimlMessage(res, 200, 'No pudimos identificar tu número. Vuelve a enviarnos el mensaje para autorizar las notificaciones.');
+    return;
+  }
+
+  try {
+    const stored = await upsertPushSubscription({ phone: sender, whatsappOptIn: true });
+    console.log('WhatsApp opt-in confirmado', { sender, subscriptionId: stored?.id });
+    respondWithTwimlMessage(res, 200, '¡Gracias! Registramos este número para enviarte las notificaciones de planes y clases.');
+  } catch (error) {
+    console.error('Error guardando el WhatsApp desde el webhook de Twilio', error);
+    respondWithTwimlMessage(res, 500, 'Tuvimos un problema guardando tu número. Intenta nuevamente en unos minutos.');
+  }
+};
+
 ['/api/push/public-key', '/push/public-key'].forEach((path) => {
   app.get(path, handlePushPublicKey);
 });
@@ -449,6 +477,8 @@ const handlePushSend = async (req, res) => {
 ['/api/push/send', '/push/send'].forEach((path) => {
   app.post(path, handlePushSend);
 });
+
+app.post('/webhooks/twilio/whatsapp', twilioWebhookParser, handleWhatsAppInbound);
 
 const validatePlanPayload = (body) => {
   const requiredFields = ['nombre', 'edad', 'acudiente', 'telefono', 'tipoPlan', 'dias', 'hora', 'clases'];
