@@ -18,7 +18,7 @@ const TEMPLATE_KEYS = {
 // Add or adjust entries here (envKey + slots) whenever a template is updated in Twilio to keep render variables in sync.
 const TEMPLATE_DEFINITIONS = {
   [TEMPLATE_KEYS.PLAN_APPROVAL]: {
-    friendlyName: 'plan_approval',
+    friendlyName: 'copy_nuevo_plan',
     envKey: 'TWILIO_TEMPLATE_PLAN_APPROVAL_SID',
     slots: ['guardianName', 'studentName', 'tutorName', 'planLabel', 'scheduleLabel', 'confirmationUrl'],
     description: 'Notifica al tutor que un plan de clases requiere su aprobación.',
