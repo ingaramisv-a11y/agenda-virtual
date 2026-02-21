@@ -54,7 +54,8 @@ Agenda Pro is a single-page control center for **Profe Diana** to register swim 
    $env:DATABASE_URL="postgres://user:pass@host:5432/dbname"
    $env:TWILIO_ACCOUNT_SID="ACxxxx"
    $env:TWILIO_AUTH_TOKEN="xxxx"
-   $env:TWILIO_WHATSAPP_NUMBER="whatsapp:+15558046628"
+   $env:TWILIO_WHATSAPP_NUMBER="whatsapp:+573003512411"
+   $env:TWILIO_MESSAGING_SERVICE_SID="<your_messaging_service_sid>"
    ```
 
 3. **Run the backend**

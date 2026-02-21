@@ -2,7 +2,7 @@ document.addEventListener("DOMContentLoaded", () => {
   const PHONE_DIGITS_MIN_LENGTH = 10;
   const DEFAULT_PUBLIC_BASE_URL = "https://agenda-virtual-backend-di4k.onrender.com";
   const DEFAULT_WHATSAPP_COUNTRY_CODE = "+57";
-  const WHATSAPP_OPT_IN_NUMBER = "15558548612";
+  const WHATSAPP_OPT_IN_NUMBER = "573003512411";
   const WHATSAPP_OPT_IN_MESSAGE = [
     "Hola profe 😊",
     "Estoy interesado(a) en recibir por WhatsApp las notificaciones de clases de natación, planes y aprobaciones.",

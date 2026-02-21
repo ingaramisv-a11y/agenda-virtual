@@ -2,11 +2,12 @@ const twilio = require('twilio');
 
 const accountSid = process.env.TWILIO_ACCOUNT_SID;
 const authToken = process.env.TWILIO_AUTH_TOKEN;
+const messagingServiceSid = (process.env.TWILIO_MESSAGING_SERVICE_SID || '').trim();
 const configuredFromNumber = (process.env.TWILIO_WHATSAPP_FROM || process.env.TWILIO_WHATSAPP_NUMBER || '').trim();
 const defaultCountryCode = (process.env.DEFAULT_WHATSAPP_COUNTRY_CODE || '57').replace(/[^0-9]/g, '');
 
 const missingCreds = !accountSid || !authToken;
-const isConfigured = Boolean(!missingCreds && configuredFromNumber);
+const isConfigured = Boolean(!missingCreds && (messagingServiceSid || configuredFromNumber));
 const twilioClient = !missingCreds ? twilio(accountSid, authToken) : null;
 
 const TEMPLATE_KEYS = {
@@ -35,8 +36,8 @@ const ensureTwilioClient = () => {
   if (missingCreds) {
     throw new Error('TWILIO_ACCOUNT_SID y TWILIO_AUTH_TOKEN son obligatorios para enviar mensajes de WhatsApp.');
   }
-  if (!configuredFromNumber) {
-    throw new Error('TWILIO_WHATSAPP_FROM es obligatorio para enviar mensajes de WhatsApp.');
+  if (!messagingServiceSid && !configuredFromNumber) {
+    throw new Error('Configura TWILIO_MESSAGING_SERVICE_SID o TWILIO_WHATSAPP_FROM para enviar mensajes de WhatsApp.');
   }
   if (!twilioClient) {
     throw new Error('No se pudo inicializar el cliente de Twilio.');
@@ -151,13 +152,14 @@ const sendWhatsAppTemplate = async ({ to, templateKey, variables = {} }) => {
   const orderedVariables = buildOrderedVariables(templateDef, variables);
   const contentSid = resolveTemplateSid(templateDef);
   const toWhatsApp = ensureWhatsAppPrefix(normalized);
-  const from = configuredFromNumber.startsWith('whatsapp:')
-    ? configuredFromNumber
-    : ensureWhatsAppPrefix(configuredFromNumber);
+  const from = configuredFromNumber
+    ? (configuredFromNumber.startsWith('whatsapp:') ? configuredFromNumber : ensureWhatsAppPrefix(configuredFromNumber))
+    : null;
 
   // Twilio Content templates require messages.create with SID + JSON variables to avoid render errors.
   await client.messages.create({
-    from,
+    from: messagingServiceSid ? undefined : from,
+    messagingServiceSid: messagingServiceSid || undefined,
     to: toWhatsApp,
     contentSid,
     contentVariables: JSON.stringify(buildContentVariablesPayload(orderedVariables)),
